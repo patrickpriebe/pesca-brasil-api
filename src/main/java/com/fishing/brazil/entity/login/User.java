@@ -29,7 +29,7 @@ public class User {
     private String password;
 
     @Column(name = "enabled", nullable = false)
-    private boolean enabled = false;
+    private boolean enabled = true;
 
     @Column(name = "verification_code", length = 6)
     private String verificationCode;
