@@ -7,10 +7,12 @@ import com.fishing.brazil.repository.BaitRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
 @Service
+@Transactional(readOnly = true)
 public class BaitService {
 
     private final BaitRepository baitRepository;
@@ -33,6 +35,7 @@ public class BaitService {
         return baitRepository.findById(id).map(this::convertToResponseDTO);
     }
 
+    @Transactional
     public BaitResponseDTO save(BaitRequestDTO dto) {
         Bait bait = new Bait();
         bait.setName(dto.getName());
@@ -41,6 +44,7 @@ public class BaitService {
         return convertToResponseDTO(baitRepository.save(bait));
     }
 
+    @Transactional
     public void delete(Long id) {
         baitRepository.deleteById(id);
     }

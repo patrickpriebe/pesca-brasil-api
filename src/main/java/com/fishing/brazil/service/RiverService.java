@@ -7,10 +7,12 @@ import com.fishing.brazil.repository.RiverRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
 @Service
+@Transactional(readOnly = true)
 public class RiverService {
 
     private final RiverRepository riverRepository;
@@ -33,6 +35,7 @@ public class RiverService {
         return riverRepository.findById(id).map(this::convertToResponseDTO);
     }
 
+    @Transactional
     public RiverResponseDTO save(RiverRequestDTO dto) {
         River river = new River();
         river.setName(dto.getName());
@@ -41,6 +44,7 @@ public class RiverService {
         return convertToResponseDTO(riverRepository.save(river));
     }
 
+    @Transactional
     public void delete(Long id) {
         riverRepository.deleteById(id);
     }

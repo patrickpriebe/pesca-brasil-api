@@ -2,6 +2,7 @@ package com.fishing.brazil.service.email;
 
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -13,6 +14,7 @@ public class EmailService {
         this.mailSender = mailSender;
     }
 
+    @Async
     public void sendVerificationEmail(String to, String name, String code) {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setTo(to);
@@ -27,6 +29,7 @@ public class EmailService {
         mailSender.send(message);
     }
 
+    @Async
     public void sendPasswordResetEmail(String to, String name, String code) {
         SimpleMailMessage message = new SimpleMailMessage();
         message.setTo(to);

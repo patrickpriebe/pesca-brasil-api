@@ -8,10 +8,13 @@ import com.fishing.brazil.repository.login.UserRepository;
 import com.fishing.brazil.service.email.EmailService;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
 import java.time.LocalDateTime;
 import java.util.Random;
 
 @Service
+@Transactional(readOnly = true)
 public class UserService {
 
     private final UserRepository userRepository;
@@ -26,6 +29,7 @@ public class UserService {
         this.emailService = emailService;
     }
 
+    @Transactional
     public User registerUser(String name, String email, String rawPassword) {
         if (userRepository.findByEmail(email).isPresent()) {
             throw new RuntimeException("Este e-mail já está em uso!");
@@ -53,6 +57,7 @@ public class UserService {
         return savedUser;
     }
 
+    @Transactional
     public void verifyAccount(String email, String code) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("Usuário não encontrado."));
@@ -75,6 +80,7 @@ public class UserService {
         userRepository.save(user);
     }
 
+    @Transactional
     public void generatePasswordResetToken(String email) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("Não encontramos uma conta com este e-mail."));
@@ -88,6 +94,7 @@ public class UserService {
         emailService.sendPasswordResetEmail(user.getEmail(), user.getName(), otp);
     }
 
+    @Transactional
     public void resetPassword(String email, String code, String newPassword) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new RuntimeException("Usuário não encontrado."));

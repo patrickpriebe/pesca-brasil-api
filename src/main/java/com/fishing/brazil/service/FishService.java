@@ -11,11 +11,13 @@ import com.fishing.brazil.repository.FishRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
 
 @Service
+@Transactional(readOnly = true)
 public class FishService {
 
     private final FishRepository fishRepository;
@@ -47,6 +49,7 @@ public class FishService {
                 .map(this::convertToResponseDTO);
     }
 
+    @Transactional
     public FishResponseDTO save(FishRequestDTO dto) {
         Fish fish = new Fish();
         fish.setCommonName(dto.getCommonName());
@@ -69,6 +72,7 @@ public class FishService {
         return convertToResponseDTO(savedFish);
     }
 
+    @Transactional
     public void delete(Long id) {
         fishRepository.deleteById(id);
     }

@@ -9,10 +9,12 @@ import com.fishing.brazil.repository.RiverRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
 @Service
+@Transactional(readOnly = true)
 public class FishingSpotService {
 
     private final FishingSpotRepository fishingSpotRepository;
@@ -35,6 +37,7 @@ public class FishingSpotService {
         return fishingSpotRepository.findByRiverId(riverId, pageable).map(this::convertToResponseDTO);
     }
 
+    @Transactional
     public FishingSpotResponseDTO save(FishingSpotRequestDTO dto) {
         River river = riverRepository.findById(dto.getRiverId())
                 .orElseThrow(() -> new RuntimeException("Rio não encontrado com o ID: " + dto.getRiverId()));
@@ -50,6 +53,7 @@ public class FishingSpotService {
         return convertToResponseDTO(fishingSpotRepository.save(spot));
     }
 
+    @Transactional
     public void delete(Long id) {
         fishingSpotRepository.deleteById(id);
     }

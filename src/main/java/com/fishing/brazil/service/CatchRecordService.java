@@ -14,10 +14,12 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
 @Service
+@Transactional(readOnly = true)
 public class CatchRecordService {
 
     private final CatchRecordRepository catchRecordRepository;
@@ -49,6 +51,7 @@ public class CatchRecordService {
         return catchRecordRepository.findAll(pageable).map(this::convertToResponseDTO);
     }
 
+    @Transactional
     public CatchRecordResponseDTO save(CatchRecordRequestDTO dto) {
         String emailDoPescador = SecurityContextHolder.getContext().getAuthentication().getName();
         User pescadorLogado = userRepository.findByEmail(emailDoPescador)
@@ -83,7 +86,6 @@ public class CatchRecordService {
             record.setFishingSpot(fishingSpotRepository.findById(dto.getFishingSpotId())
                     .orElseThrow(() -> new RuntimeException("Ponto de pesca não especificado ou não encontrado.")));
         }
-        // ------------------------------------------------------
 
         if (dto.getBaitId() != null) {
             record.setBait(baitRepository.findById(dto.getBaitId())
@@ -107,6 +109,7 @@ public class CatchRecordService {
         return convertToResponseDTO(catchRecordRepository.save(record));
     }
 
+    @Transactional
     public void delete(Long id) {
         catchRecordRepository.deleteById(id);
     }

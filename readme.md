@@ -2,9 +2,9 @@
 
 > **Esta é a API que alimenta o sistema. [Acesse o repositório da Interface (UI) aqui](https://github.com/patrickpriebe/pesca-brasil-ui)**
 
-O PescaBrasil é um sistema full-stack. Este repositório contém o **Back-end**, desenhado para ser escalável, monitorável e altamente seguro. Nada de atalhos: a autenticação é própria, a infraestrutura é moderna e o código é limpo.
+O PescaBrasil é um sistema full-stack. Este repositório contém a API RESTful, desenvolvida em Java com Spring Boot sob os preceitos de Clean Code, DDD e arquitetura REST. A aplicação destaca-se pela excelência técnica e rigorosa separação de responsabilidades entre Controllers, Services, Repositories, DTOs e Enums.
 
-O motor da aplicação garante o gerenciamento de relações complexas do diário de capturas, catálogos de espécies, controle de equipamentos e mapeamento geográfico.
+O projeto garante alta manutenibilidade e baixo acoplamento através de Injeção de Dependências, proteção do domínio com DTOs, tipagem forte com Enums e Spring Security com JWT para autenticação stateless. A qualidade da API é reforçada pela validação declarativa de dados com Bean Validation, tratamento centralizado de erros via Global Exception Handling (@RestControllerAdvice), persistência com Spring Data JPA/Hibernate e controle transacional declarativo com @Transactional.
 
 ---
 
@@ -12,7 +12,7 @@ O motor da aplicação garante o gerenciamento de relações complexas do diári
 
 A API foi desenvolvida focando na integridade dos dados, proteção de rotas e monitoramento em tempo real de produção.
 
-*   **Java & Spring Boot:** Arquitetura rigorosa separada em camadas (*Controllers, Services, Repositories*).
+*   **Java & Spring Boot:** Arquitetura modular e orientada a domínio (DDD), com divisão estrita de responsabilidades (*Controllers, Services, Repositories, DTOs, Enums*), validações com e gerenciamento transacional
 *   **Autenticação Customizada:** Sistema de login próprio e raiz. Envolve disparo de e-mail transacional para verificação e proteção das rotas com integração de **Captcha**, garantindo segurança sem depender de soluções de prateleira (como Firebase Auth).
 *   **Gestão de Mídia:** Upload de imagens de capturas integrado diretamente via API com o **Cloudinary**.
 *   **Render (DevOps):** Hospedagem da API Spring Boot, mantendo os serviços sempre disponíveis e rodando em nuvem.

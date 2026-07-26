@@ -7,10 +7,12 @@ import com.fishing.brazil.repository.EquipmentRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
 
 @Service
+@Transactional(readOnly = true)
 public class EquipmentService {
 
     private final EquipmentRepository equipmentRepository;
@@ -27,6 +29,7 @@ public class EquipmentService {
         return equipmentRepository.findById(id).map(this::convertToResponseDTO);
     }
 
+    @Transactional
     public EquipmentResponseDTO save(EquipmentRequestDTO dto) {
         Equipment equipment = new Equipment();
         equipment.setType(dto.getType());
@@ -35,6 +38,7 @@ public class EquipmentService {
         return convertToResponseDTO(equipmentRepository.save(equipment));
     }
 
+    @Transactional
     public void delete(Long id) {
         equipmentRepository.deleteById(id);
     }

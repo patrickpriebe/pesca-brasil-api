@@ -7,8 +7,10 @@ import com.fishing.brazil.repository.FishingRegulationRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@Transactional(readOnly = true)
 public class FishingRegulationService {
 
     private final FishingRegulationRepository repository;
@@ -27,6 +29,7 @@ public class FishingRegulationService {
         return pageData.map(this::convertToResponseDTO);
     }
 
+    @Transactional
     public FishingRegulationResponseDTO save(FishingRegulationRequestDTO dto) {
         FishingRegulation reg = new FishingRegulation();
         reg.setHydrographicBasin(dto.getHydrographicBasin());
@@ -36,6 +39,7 @@ public class FishingRegulationService {
         return convertToResponseDTO(repository.save(reg));
     }
 
+    @Transactional
     public void delete(Long id) {
         repository.deleteById(id);
     }

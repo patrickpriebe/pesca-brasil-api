@@ -11,8 +11,10 @@ import com.fishing.brazil.repository.RiverSpeciesRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
+@Transactional(readOnly = true)
 public class RiverSpeciesService {
 
     private final RiverSpeciesRepository riverSpeciesRepository;
@@ -33,6 +35,7 @@ public class RiverSpeciesService {
         return riverSpeciesRepository.findByRiverId(riverId, pageable).map(this::convertToResponseDTO);
     }
 
+    @Transactional
     public RiverSpeciesResponseDTO save(RiverSpeciesRequestDTO dto) {
         River river = riverRepository.findById(dto.getRiverId())
                 .orElseThrow(() -> new RuntimeException("Rio não encontrado"));
@@ -48,6 +51,7 @@ public class RiverSpeciesService {
         return convertToResponseDTO(riverSpeciesRepository.save(rs));
     }
 
+    @Transactional
     public void delete(Long id) {
         riverSpeciesRepository.deleteById(id);
     }
