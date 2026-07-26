@@ -6,6 +6,14 @@ O PescaBrasil é um sistema full-stack. Este repositório contém a API RESTful,
 
 O projeto garante alta manutenibilidade e baixo acoplamento através de Injeção de Dependências, proteção do domínio com DTOs, tipagem forte com Enums e Spring Security com JWT para autenticação stateless. A qualidade da API é reforçada pela validação declarativa de dados com Bean Validation, tratamento centralizado de erros via Global Exception Handling (@RestControllerAdvice), persistência com Spring Data JPA/Hibernate e controle transacional declarativo com @Transactional.
 
+## 📸 Telas principais do Sistema
+
+|               Mapa Interativo & Clima                |                 Registro de Capturas                  |
+|:----------------------------------------------------:|:-----------------------------------------------------:|
+|     ![Mapa Interativo](https://github.com/patrickpriebe/pesca-brasil-ui/blob/master/docs/screenshots/map.png)     | ![Registro de Captura](https://github.com/patrickpriebe/pesca-brasil-ui/blob/master/docs/screenshots/register.png) |
+|                **Catálogo de Peixes**                |                  **Diário de Pesca**                  |
+| ![Catálogo de Peixes](https://github.com/patrickpriebe/pesca-brasil-ui/blob/master/docs/screenshots/catalog.png) |    ![Versão Mobile](https://github.com/patrickpriebe/pesca-brasil-ui/blob/master/docs/screenshots/logbook.png)     |
+
 ---
 
 ## 🏗️ Arquitetura, Infraestrutura e Stack
