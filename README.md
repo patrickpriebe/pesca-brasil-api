@@ -7,7 +7,7 @@ A logbook for Brazilian sport fishing: a fisher records what they caught, where 
 caught it, on what bait, under what moon — and the record joins a public map, a
 species catalogue and three leaderboards.
 
-**Live app: https://pesca-brasil-ui.vercel.app** · **API: https://pesca-brasil-api.onrender.com**
+**Live app: https://pescabrasil.vercel.app** · **API: https://pesca-brasil-api.onrender.com**
 
 The project rests on a single decision: **a fishing spot does not have to exist before
 you fish there.** Every other system of this kind asks you to pick a location from a
@@ -585,9 +585,6 @@ Recorded so they do not read as oversights. Everything here has an entry in
 - **Local development shares the deployed database.** A `docker-compose.yml` with a
   local PostgreSQL is the fix.
 - **There is no CI pipeline**, and the Docker build runs with `-DskipTests`.
-- **CORS allows `pescabrasil.vercel.app`; the deployed frontend is at
-  `pesca-brasil-ui.vercel.app`.** Worth checking against the Vercel project's current
-  domains.
 - **Closed seasons are stored and not enforced.** A catch record dated inside a
   *piracema* period is accepted silently — and deciding what should happen instead is a
   product question before it is a code one.

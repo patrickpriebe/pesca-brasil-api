@@ -235,7 +235,6 @@ by the caller. Validate the property against an allowlist per resource and accep
 | No `.dockerignore`, so `COPY . .` ships `target/` into the build stage | root |
 | The `pom.xml` has empty `<name>`, `<description>`, `<licenses>` and `<scm>` blocks | root |
 | `HELP.md` is the untouched Spring Initializr file | root |
-| CORS allows `pescabrasil.vercel.app`; the deployed frontend is `pesca-brasil-ui.vercel.app` | `SecurityConfig` |
 
 ---
 

@@ -261,11 +261,12 @@ An explicit list rather than a wildcard, which is required anyway once
 `allowCredentials` is true — the browser refuses `*` with credentials, so this is the
 framework declining to let the configuration be wrong.
 
-> **The deployed frontend is at `https://pesca-brasil-ui.vercel.app`, which is not on
-> this list.** The two names differ by two hyphens. Any deployment served from the
-> hyphenated host is refused by the browser before the request is sent. This is worth
-> checking against the Vercel project's current domains before it is treated as
-> correct.
+The second entry is the deployed frontend, `https://pescabrasil.vercel.app`. The first
+is Angular's development server. Nothing else is accepted, so a Vercel preview
+deployment — which gets its own generated hostname — is refused by the browser before
+the request is sent. That is the correct default; adding preview origins means either
+listing them one by one or matching a pattern, and a pattern that is too loose is how a
+CORS allowlist stops being one.
 
 ---
 
