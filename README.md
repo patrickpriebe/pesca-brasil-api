@@ -132,7 +132,7 @@ Full reasoning: [docs/01-architecture.md](docs/01-architecture.md).
 | Validation | **Bean Validation** | Declarative, with a `@RestControllerAdvice` |
 | Media | **Cloudinary** (`cloudinary-http44` 1.36.0) | Catch photos |
 | E-mail | **Spring Mail** over Gmail SMTP | Six-digit verification codes |
-| Bot defence | **Google reCAPTCHA** | Register and login |
+| Bot defence | **Google reCAPTCHA** | Register, login and password reset |
 | Docs | **springdoc-openapi 2.6.0** | On the classpath — see [Known limits](#known-limits) |
 | Boilerplate | **Lombok** | Getters, setters, id-only equality |
 | Container | **Docker**, two-stage | Maven build stage, Temurin 21 runtime |
@@ -183,7 +183,7 @@ decided by whether that field is null, and the two are mutually exclusive.
 
 - Two catches from the same rock create two spots. The table grows once per catch, not
   once per place. Radius-based deduplication is the fix, and it is
-  [on the roadmap](docs/06-roadmap.md#16--deduplicate-fishing-spots).
+  [on the roadmap](docs/06-roadmap.md#12--deduplicate-fishing-spots).
 - A spot born from a pin carries `accessType = "Não especificado"` and a generated name
   — `"Ponto no <river>"` when the fisher did not supply one — and is otherwise
   indistinguishable from a curated one.
@@ -254,21 +254,21 @@ Full detail: [docs/02-data-model.md](docs/02-data-model.md).
 ## API surface
 
 Base path `/api`. Every collection is paged (`page`, `size`, `sortBy`). Every `GET` is
-public; 🔒 marks what needs a bearer token.
+public; **🔒** needs a bearer token, **🛡** needs `ROLE_ADMIN` as well.
 
 | Resource | Endpoints |
 |---|---|
 | **Auth** | `POST /auth/register` · `/auth/verify` · `/auth/login` · `/auth/forgot-password` · `/auth/reset-password` |
-| **Catch records** | `GET /catch-records` · `POST` 🔒 · `DELETE /{id}` 🔒 |
+| **Catch records** | `GET /catch-records` · `POST` 🔒 · `DELETE /{id}` 🔒 owner |
 | **Rankings** | `GET /catch-records/ranking/comprimento` · `/peso` · `/pescadores` |
-| **Fish** | `GET /fishes` `?name=` · `GET /{id}` · `POST` 🔒 · `DELETE /{id}` 🔒 |
-| **Baits** | `GET /baits` `?name=` · `POST` 🔒 · `DELETE /{id}` 🔒 |
-| **Equipment** | `GET /equipments` · `POST` 🔒 · `DELETE /{id}` 🔒 |
-| **Rivers** | `GET /rivers` `?name=` · `GET /{id}` · `POST` 🔒 · `DELETE /{id}` 🔒 |
-| **River species** | `GET /river-species` · `GET /river/{riverId}` · `POST` 🔒 · `DELETE /{id}` 🔒 |
-| **Fishing spots** | `GET /fishing-spots` · `GET /river/{riverId}` · `GET /{id}` · `POST` 🔒 · `DELETE /{id}` 🔒 |
-| **Regulations** | `GET /fishing-regulations` `?basin=` · `POST` 🔒 · `DELETE /{id}` 🔒 |
-| **Images** | `POST /images/upload` — `multipart/form-data`, field `file` |
+| **Fish** | `GET /fishes` `?name=` · `GET /{id}` · `POST` 🛡 · `DELETE /{id}` 🛡 |
+| **Baits** | `GET /baits` `?name=` · `POST` 🛡 · `DELETE /{id}` 🛡 |
+| **Equipment** | `GET /equipments` · `POST` 🛡 · `DELETE /{id}` 🛡 |
+| **Rivers** | `GET /rivers` `?name=` · `GET /{id}` · `POST` 🛡 · `DELETE /{id}` 🛡 |
+| **River species** | `GET /river-species` · `GET /river/{riverId}` · `POST` 🛡 · `DELETE /{id}` 🛡 |
+| **Fishing spots** | `GET /fishing-spots` · `GET /river/{riverId}` · `GET /{id}` · `POST` 🛡 · `DELETE /{id}` 🛡 |
+| **Regulations** | `GET /fishing-regulations` `?basin=` · `POST` 🛡 · `DELETE /{id}` 🛡 |
+| **Images** | `POST /images/upload` 🔒 — `multipart/form-data`, field `file`, images only, 5 MB |
 
 Errors carry a consistent envelope, built by `GlobalExceptionHandler`:
 
@@ -340,10 +340,20 @@ no denylist and no server-side session; logging out means the client discards th
 token. Twenty-four hours is the entire blast radius of a leak, and that number is the
 thing to argue about — not the mechanism.
 
-reCAPTCHA guards register and login, and **fails closed**: a network error, a malformed
-response or a missing secret all refuse the request. Failing open would silently remove
-the only bot defence on the account endpoints, and a registration form is exactly where
-that matters.
+reCAPTCHA guards register, login **and password reset**, and **fails closed**: a network
+error, a malformed response or a missing secret all refuse the request. Failing open
+would silently remove the only bot defence on the account endpoints, and a registration
+form is exactly where that matters.
+
+The reset flow answers the same thing whether or not the account exists — *"se existir
+uma conta com este e-mail, enviamos um código"* — and `POST /auth/reset-password`
+returns one message for a wrong code, an expired code and an unknown address alike.
+Distinguishing them turns the endpoint into a free membership check for whoever is
+holding a list of e-mail addresses.
+
+The six-digit code comes from `SecureRandom`. It is a short-lived credential, and a
+predictable PRNG stops protecting the account as soon as somebody has watched the
+sequence a few times.
 
 Sessions are `STATELESS` and CSRF is disabled — the correct pairing, because with no
 session cookie there is no ambient credential for a cross-site request to ride on.
@@ -353,22 +363,28 @@ No secret is in this repository. `application.properties` holds only the shape
 environment panel, and `application-local.properties` is git-ignored and has never
 appeared in the history.
 
+**`jwt.secret` has no default at all** — `${JWT_SECRET}`, not `${JWT_SECRET:...}` — so
+an environment that forgets the variable fails to start rather than signing tokens with
+a value anybody could read here. `JwtUtil` also refuses to start on a secret shorter
+than 32 characters, because HS256 needs 256 bits and the alternative is a
+`WeakKeyException` at the first login that does not say what to fix.
+
 Full detail, including what is not done: [docs/04-security.md](docs/04-security.md).
 
 ---
 
 ## What is public, and why
 
-Four rules, in order:
+Three rules in the filter chain, then method security on top of them:
 
 | # | Matcher | Effect |
 |---|---|---|
 | 1 | `/api/auth/**` | Public — registration cannot require a token |
-| 2 | `/api/images/**` | Public |
-| 3 | `GET /api/**` | Public |
-| 4 | everything else | Authenticated |
+| 2 | `GET /api/**` | Public |
+| 3 | everything else | Authenticated |
+| + | catalogue writes | `@PreAuthorize("hasRole('ADMIN')")` |
 
-Rule 3 is a product decision expressed as configuration: **the catalogue and the
+Rule 2 is a product decision expressed as configuration: **the catalogue and the
 logbook are public.** Anyone can read the species, the rivers, the closed seasons, the
 leaderboards and every catch record without an account. That is what the product is — a
 public record of Brazilian sport fishing — and putting a login in front of it would
@@ -377,6 +393,25 @@ cost exactly the audience it is meant to reach.
 It is also why `CatchRecordResponseDTO` carries `userName` and no other identifying
 field. The records are public, so the response was designed for a public reader from
 the start rather than trimmed later.
+
+**Reading is open; writing is not, and the two kinds of writing are not the same.**
+Logging a catch is what any verified fisher does, so `POST /api/catch-records` asks
+only for a valid token. Editing the species list changes what everybody sees, so every
+catalogue write — fish, baits, equipment, rivers, river species, fishing spots,
+regulations — carries `@PreAuthorize("hasRole('ADMIN')")`. Deleting a catch record sits
+between the two: it needs a token *and* ownership, with `ROLE_ADMIN` as the exception.
+
+> **`ROLE_ADMIN` is not granted by any endpoint.** Every account registered through the
+> API gets `ROLE_PESCADOR`. Promoting somebody is a deliberate database operation:
+>
+> ```sql
+> INSERT INTO tb_user_roles (user_id, role_id)
+> SELECT u.id, r.id FROM tb_user u, tb_role r
+> WHERE u.email = 'you@example.com' AND r.name = 'ROLE_ADMIN';
+> ```
+>
+> There is no self-service path to admin on purpose — a registration endpoint that can
+> hand out the role that guards the catalogue is not guarding anything.
 
 ---
 
@@ -422,10 +457,11 @@ curl "http://localhost:8080/api/fishes?size=5"
 
 | To exercise | You need |
 |---|---|
-| Any read | PostgreSQL only |
-| Register and log in | reCAPTCHA secret **and** SMTP credentials |
-| Photo upload | Cloudinary credentials |
-| Anything authenticated | `jwt.secret`, at least 32 characters |
+| Booting at all | `jwt.secret`, at least 32 characters — there is no default |
+| Any read | PostgreSQL |
+| Register, log in, reset a password | reCAPTCHA secret **and** SMTP credentials |
+| Photo upload | Cloudinary credentials, and a token |
+| Catalogue writes | An account holding `ROLE_ADMIN` |
 
 Registration is the awkward one locally: without a working reCAPTCHA secret the
 endpoint refuses everything, because the service fails closed. Google's documented test
@@ -547,27 +583,17 @@ upload does not lose the rest of the form.
 Recorded so they do not read as oversights. Everything here has an entry in
 [docs/06-roadmap.md](docs/06-roadmap.md).
 
-- **Roles are defined but not enforced on the server.** `ROLE_ADMIN` and
-  `ROLE_PESCADOR` are seeded, assigned, loaded as authorities and returned on login —
-  and no endpoint checks them. There is no `@PreAuthorize` anywhere; the only
-  distinction the API makes is authenticated versus not, so the admin boundary
-  currently exists only in what the frontend chooses to render. Method security on the
-  catalogue writes is the first item on the roadmap.
-- **Catch-record deletion is authenticated but not owner-checked.** The write path takes
-  the owner from the token; the delete path does not compare it.
-- **`jwt.secret` has a committed fallback.** It exists so a fresh clone boots, and the
-  consequence is that an environment missing `JWT_SECRET` also boots — signing with a
-  value published in this repository. A secret should have no default, for the same
-  reason `DB_URL` has none.
-- **The image endpoint is unauthenticated and unbounded.** No token, no size limit, no
-  content-type allowlist, writing into the project's Cloudinary account.
 - **Nothing is rate limited.** Login, registration and password reset can each be
   automated against as fast as the network allows, and the free tiers behind them —
-  SMTP quota, Cloudinary storage, database connections — are what break first.
-- **`forgot-password` has no captcha and confirms whether an account exists.** That is
-  e-mail enumeration, cheaply. It should answer *"if an account exists, a code has been
-  sent"* either way.
-- **The OTP comes from `java.util.Random`**, where `SecureRandom` belongs.
+  SMTP quota, Cloudinary storage, database connections — are what break first. The
+  right layer is the edge rather than a counter inside a service, and an in-process
+  limiter behind Render's proxy would need `X-Forwarded-For` handled correctly or it
+  would rate-limit every user as if they were one. That decision is still open.
+- **There is no password policy.** Nothing checks length or composition, so a
+  one-character password is accepted.
+- **Tokens cannot be revoked.** There is no denylist and no `jti`; a leaked token is
+  valid until it expires. Twenty-four hours is the blast radius, and the per-request
+  database read is what keeps a *disabled* account from surviving that window.
 - **The schema is owned by `ddl-auto=update`.** It never drops, never alters, leaves no
   record of what ran, and gives the application permission to reshape production at
   boot. Flyway plus `validate` is the fix, and it blocks two other items: renaming

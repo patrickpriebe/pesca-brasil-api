@@ -88,8 +88,13 @@ public class AuthController {
     @PostMapping("/forgot-password")
     public ResponseEntity<?> forgotPassword(@RequestBody ForgotPasswordRequestDTO request) {
         try {
+            recaptchaService.verificarFiltroAntiRobo(request.getRecaptchaToken());
+
             userService.generatePasswordResetToken(request.getEmail());
-            return ResponseEntity.ok("Código de recuperação enviado para o seu e-mail.");
+
+            // Sempre a mesma resposta, exista a conta ou nao: o unico sinal de que o
+            // e-mail esta cadastrado deve ser a mensagem que chega na caixa de entrada.
+            return ResponseEntity.ok("Se existir uma conta com este e-mail, enviamos um código de recuperação.");
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         }

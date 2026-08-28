@@ -27,8 +27,20 @@ Thirty-eight endpoints across ten controllers. Base path `/api`.
 Authorization: Bearer <jwt>
 ```
 
-Every `GET` under `/api` is public. Everything else needs a valid token. The full rule
-set and its reasoning is in [Security](04-security.md).
+Every `GET` under `/api` is public. Everything else needs a valid token, and some
+handlers need more than that:
+
+| Marker | Requirement |
+|---|---|
+| *(none)* | Public |
+| 🔒 | A valid bearer token |
+| 🔒 owner | A valid token, and the record must belong to the caller (`ROLE_ADMIN` excepted) |
+| 🛡 | A valid token **and** `ROLE_ADMIN` |
+
+`ROLE_ADMIN` is not granted by any endpoint — registration always assigns
+`ROLE_PESCADOR`. Promoting an account is a deliberate database operation; the statement
+is in [Security](04-security.md#two-kinds-of-write-two-different-bars), along with the
+reasoning behind the whole rule set.
 
 **Pagination.** Every collection endpoint is paged, with the same four parameters:
 
@@ -68,7 +80,8 @@ Responses are Spring Data `Page` objects:
 | `204` | Deleted |
 | `400` | Bean validation failure, or any failure inside `/api/auth/**` |
 | `401` | Missing, expired or invalid token |
-| `404` | Not found — and, see below, most other business failures |
+| `403` | Authenticated, but the handler requires `ROLE_ADMIN` |
+| `404` | Not found — and, see below, most other business failures. Also what a catch record belonging to somebody else answers |
 
 ---
 
@@ -162,11 +175,18 @@ what to render.
 ### `POST /api/auth/forgot-password`
 
 ```json
-{ "email": "fisher@example.com" }
+{ "email": "fisher@example.com", "recaptchaToken": "03AGdBq26..." }
 ```
 
-Writes a fresh six-digit code and e-mails it. **No captcha on this endpoint** — noted
-in [Security](04-security.md).
+Verifies the captcha, then writes a fresh six-digit code and e-mails it — **if the
+account exists**. When it does not, nothing happens and the response is identical:
+
+```
+200 → "Se existir uma conta com este e-mail, enviamos um código de recuperação."
+```
+
+The only signal that an address is registered is the message that arrives in that
+inbox. See [Security](04-security.md#the-reset-flow-does-not-confirm-who-exists).
 
 ### `POST /api/auth/reset-password`
 
@@ -175,6 +195,10 @@ in [Security](04-security.md).
 ```
 
 Checks the expiry, then the code, then re-hashes and clears both columns.
+
+An unknown e-mail, a wrong code and an expired code all return the same string —
+*"Código de segurança inválido ou expirado. Solicite um novo."* — so this endpoint
+cannot be used as the membership check the previous one refuses to be.
 
 ---
 
@@ -238,9 +262,15 @@ is on the [roadmap](06-roadmap.md).
 `201` with the created record. Enum values are the literal names:
 `SUNNY | CLOUDY | RAINY | WINDY`, `NEW | WAXING | FULL | WANING`, `RELEASED | KEPT`.
 
-### `DELETE /api/catch-records/{id}` 🔒
+### `DELETE /api/catch-records/{id}` 🔒 owner
 
-`204`. Requires authentication.
+`204`. Requires a token, and the record must belong to the caller — the service loads
+it and compares its owner's e-mail against the authenticated principal. `ROLE_ADMIN`
+passes regardless.
+
+**A record belonging to somebody else answers exactly like one that does not exist**:
+`404` with *"Registro de captura não encontrado."* A distinct `403` would confirm the
+record exists to whoever is walking the id space.
 
 ---
 
@@ -295,8 +325,8 @@ list, so ties are broken arbitrarily by whatever order the database returned.
 |---|---|---|---|
 | `GET` | `/api/fishes` | public | `?name=` case-insensitive partial match; sorts on `commonName` |
 | `GET` | `/api/fishes/{id}` | public | `404` if absent |
-| `POST` | `/api/fishes` | 🔒 | Validated |
-| `DELETE` | `/api/fishes/{id}` | 🔒 | `204` |
+| `POST` | `/api/fishes` | 🛡 | Validated |
+| `DELETE` | `/api/fishes/{id}` | 🛡 | `204` |
 
 ```json
 {
@@ -321,8 +351,8 @@ so what you write here is not visible through the API.
 | Method | Path | Auth |
 |---|---|---|
 | `GET` | `/api/baits` — `?name=` partial match, sorts on `name` | public |
-| `POST` | `/api/baits` | 🔒 |
-| `DELETE` | `/api/baits/{id}` | 🔒 |
+| `POST` | `/api/baits` | 🛡 |
+| `DELETE` | `/api/baits/{id}` | 🛡 |
 
 ```json
 { "name": "Colher giratória", "type": "ARTIFICIAL", "description": "..." }
@@ -338,8 +368,8 @@ exists but no controller exposes it.
 | Method | Path | Auth |
 |---|---|---|
 | `GET` | `/api/equipments` — sorts on `id` | public |
-| `POST` | `/api/equipments` | 🔒 |
-| `DELETE` | `/api/equipments/{id}` | 🔒 |
+| `POST` | `/api/equipments` | 🛡 |
+| `DELETE` | `/api/equipments/{id}` | 🛡 |
 
 ```json
 { "type": "CARRETILHA", "recommendedLineWeight": "17–30 lb", "action": "Média-rápida" }
@@ -356,8 +386,8 @@ and is not routed.
 |---|---|---|
 | `GET` | `/api/rivers` — `?name=` partial match, sorts on `name` | public |
 | `GET` | `/api/rivers/{id}` | public |
-| `POST` | `/api/rivers` | 🔒 |
-| `DELETE` | `/api/rivers/{id}` | 🔒 |
+| `POST` | `/api/rivers` | 🛡 |
+| `DELETE` | `/api/rivers/{id}` | 🛡 |
 
 ```json
 { "name": "Rio Paraná", "hydrographicBasin": "Bacia do Paraná", "description": "..." }
@@ -376,8 +406,8 @@ Which species live where, with how much of it and when.
 |---|---|---|
 | `GET` | `/api/river-species` — sorts on `id` | public |
 | `GET` | `/api/river-species/river/{riverId}` | public |
-| `POST` | `/api/river-species` | 🔒 |
-| `DELETE` | `/api/river-species/{id}` | 🔒 |
+| `POST` | `/api/river-species` | 🛡 |
+| `DELETE` | `/api/river-species/{id}` | 🛡 |
 
 ```json
 { "riverId": 7, "fishId": 3, "abundance": "ALTA", "bestSeason": "Setembro a Novembro" }
@@ -396,8 +426,8 @@ call.
 | `GET` | `/api/fishing-spots` — sorts on `name` | public |
 | `GET` | `/api/fishing-spots/river/{riverId}` | public |
 | `GET` | `/api/fishing-spots/{id}` | public |
-| `POST` | `/api/fishing-spots` | 🔒 |
-| `DELETE` | `/api/fishing-spots/{id}` | 🔒 |
+| `POST` | `/api/fishing-spots` | 🛡 |
+| `DELETE` | `/api/fishing-spots/{id}` | 🛡 |
 
 ```json
 {
@@ -422,8 +452,8 @@ Closed seasons — *piracema* — by hydrographic basin.
 | Method | Path | Auth |
 |---|---|---|
 | `GET` | `/api/fishing-regulations` — `?basin=` partial match, sorts on `hydrographicBasin` | public |
-| `POST` | `/api/fishing-regulations` | 🔒 |
-| `DELETE` | `/api/fishing-regulations/{id}` | 🔒 |
+| `POST` | `/api/fishing-regulations` | 🛡 |
+| `DELETE` | `/api/fishing-regulations/{id}` | 🛡 |
 
 ```json
 {
@@ -442,7 +472,7 @@ product question, and it is on the [roadmap](06-roadmap.md).
 
 ## Images · `/api/images`
 
-### `POST /api/images/upload`
+### `POST /api/images/upload` 🔒
 
 `multipart/form-data`, field name `file`. Uploads to Cloudinary and returns the URL.
 
@@ -450,14 +480,27 @@ product question, and it is on the [roadmap](06-roadmap.md).
 { "url": "https://res.cloudinary.com/.../catch.jpg" }
 ```
 
-`500` with `{"error": "Falha ao fazer upload da imagem"}` on an `IOException`.
+| Constraint | Enforced by |
+|---|---|
+| Requires a bearer token | The filter chain — there is no `permitAll` for `/api/images/**` |
+| Maximum **5 MB** | `spring.servlet.multipart.max-file-size` and `max-request-size` |
+| `Content-Type` must start with `image/` | The handler |
+| The file must not be empty | The handler |
+
+| Response | When |
+|---|---|
+| `200` `{"url": "..."}` | Uploaded |
+| `400` `{"error": "Nenhum arquivo foi enviado."}` | Empty file |
+| `400` `{"error": "O arquivo enviado precisa ser uma imagem."}` | Wrong or missing content type |
+| `500` `{"error": "Falha ao fazer upload da imagem"}` | `IOException` reaching Cloudinary |
 
 The client is expected to upload first and then send the returned URL as `photoUrl` on
 the catch record. Splitting the two means a slow upload does not hold a database
 transaction open, and a failed upload does not lose the rest of the form.
 
-> **This endpoint is `permitAll`.** It accepts uploads without a token and without a
-> declared size or type limit. See [Security](04-security.md#the-image-endpoint-is-open).
+The content type is a header the client chooses, so it is not proof of anything — it is
+there to stop the endpoint becoming general-purpose file storage by accident. Checking
+the actual bytes is Cloudinary's job.
 
 ---
 

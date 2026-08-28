@@ -101,11 +101,13 @@ flowchart TB
 
     A --> S{"Authorization rules"}
     S -->|"/api/auth/**"| P["permitted"]
-    S -->|"/api/images/**"| P
     S -->|"any GET /api/**"| P
     S -->|"anything else"| AU{"authenticated?"}
     AU -->|"no"| X4["401"]
-    AU -->|"yes"| P
+    AU -->|"yes"| MS{"@PreAuthorize<br/>on the handler?"}
+    MS -->|"none"| P
+    MS -->|"hasRole ADMIN, not held"| X5["403"]
+    MS -->|"hasRole ADMIN, held"| P
 
     P --> CT["Controller"]
     CT --> SV["Service · @Transactional"]
@@ -119,7 +121,7 @@ flowchart TB
     GEH --> ERR["StandardError JSON"]
 ```
 
-Two details in that diagram are worth naming.
+Three details in that diagram are worth naming.
 
 **The JWT filter runs on every request, including public ones.** It exits early when
 there is no `Authorization` header, so an anonymous `GET /api/fishes` costs nothing.
@@ -130,6 +132,13 @@ When a token *is* present the filter loads the user from the database — see
 is this*; the rules in `SecurityConfig` answer *may they*. A request with a perfectly
 valid token for a disabled account gets past the first and fails the second, because
 `CustomUserDetailsService` passes `user.isEnabled()` into the `UserDetails` it builds.
+
+**Authorization is asked twice, at two different resolutions.** The filter chain decides
+by URL and method, which is as specific as a matcher can be. `@PreAuthorize` on the
+handler decides by role, which is the part a URL pattern cannot express — the catalogue
+`POST` and the catch-record `POST` are both authenticated writes under `/api`, and only
+one of them should require an administrator. Ownership is a third resolution again, and
+it lives in the service, because only the service can load the row to compare against.
 
 ---
 

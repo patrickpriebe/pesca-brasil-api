@@ -4,10 +4,12 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.util.Date;
 import java.util.function.Function;
@@ -19,9 +21,24 @@ public class JwtUtil {
     private String secretKey;
 
     private static final long EXPIRATION_TIME = 1000 * 60 * 60 * 24;
+    private static final int MINIMUM_SECRET_LENGTH = 32;
+
+    /**
+     * HS256 exige uma chave de pelo menos 256 bits. Sem esta verificacao a
+     * aplicacao sobe normalmente e so falha na primeira emissao de token, com
+     * uma WeakKeyException que nao diz o que precisa ser corrigido.
+     */
+    @PostConstruct
+    void validateSecret() {
+        if (secretKey == null || secretKey.trim().length() < MINIMUM_SECRET_LENGTH) {
+            throw new IllegalStateException(
+                    "A propriedade jwt.secret (variavel JWT_SECRET) precisa ter no minimo "
+                            + MINIMUM_SECRET_LENGTH + " caracteres para assinar tokens HS256.");
+        }
+    }
 
     private Key getSigningKey() {
-        return Keys.hmacShaKeyFor(secretKey.getBytes());
+        return Keys.hmacShaKeyFor(secretKey.getBytes(StandardCharsets.UTF_8));
     }
 
     public String generateToken(String username) {

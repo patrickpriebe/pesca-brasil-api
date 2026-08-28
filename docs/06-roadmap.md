@@ -7,6 +7,7 @@ Every item here is referenced from somewhere else in the documentation. Nothing 
 list is a surprise to the code — the point of writing it down is that a limitation
 nobody has named is a limitation nobody fixes.
 
+- [Done](#done)
 - [Correctness and safety first](#correctness-and-safety-first)
 - [Then the foundations](#then-the-foundations)
 - [Then the product](#then-the-product)
@@ -15,51 +16,38 @@ nobody has named is a limitation nobody fixes.
 
 ---
 
+## Done
+
+Kept on the list rather than deleted, so the reasoning survives the fix.
+
+| Was | Now |
+|---|---|
+| **Roles never enforced.** `ROLE_ADMIN` was seeded, assigned and returned on login, and no endpoint checked it | `@EnableMethodSecurity` on `SecurityConfig`, `@PreAuthorize("hasRole('ADMIN')")` on all fourteen catalogue write handlers. Catch records stay writable by any verified fisher |
+| **Catch-record deletion authenticated but not owned** | The service loads the record, compares its owner against the principal, and excepts `ROLE_ADMIN`. Not-yours answers as not-found |
+| **`jwt.secret` had a committed fallback** | `${JWT_SECRET}` with no default, so a missing variable fails the boot. `JwtUtil` refuses a secret shorter than 32 characters at construction |
+| **Image upload open and unbounded** | Token required, 5 MB cap in configuration, `image/*` only, empty file refused |
+| **`forgot-password` had no captcha and confirmed account existence** | Captcha added; identical response whether or not the account exists; `reset-password` collapsed to one failure message |
+| **OTP from `java.util.Random`, range excluded `999999`** | `SecureRandom` and `nextInt(1_000_000)` |
+
+> **`ROLE_ADMIN` is not granted by any endpoint**, and the frontend's management screens
+> are guarded by `authGuard` alone — so a `ROLE_PESCADOR` account now gets `403` from
+> those screens' writes. Promote the accounts that need it:
+>
+> ```sql
+> INSERT INTO tb_user_roles (user_id, role_id)
+> SELECT u.id, r.id FROM tb_user u, tb_role r
+> WHERE u.email = 'you@example.com' AND r.name = 'ROLE_ADMIN';
+> ```
+>
+> The frontend's HTTP interceptor logs the user out on `403` as well as `401`, so a
+> non-admin hitting a management screen is signed out rather than shown a message.
+> Adding a role check to the Angular guard is the matching frontend change.
+
+---
+
 ## Correctness and safety first
 
-### 1 · Enforce roles on the server
-
-`ROLE_ADMIN` and `ROLE_PESCADOR` are seeded, assigned, loaded into the security context
-and returned on login — and never checked. Every write endpoint accepts any verified
-account, so the admin distinction lives only in what the frontend chooses to render.
-
-The fix is `@EnableMethodSecurity` plus `@PreAuthorize("hasRole('ADMIN')")` on
-catalogue writes — fish, baits, equipment, rivers, river species and regulations —
-leaving catch records writable by any fisher. It is small, and it is first because
-everything else on this list is a smaller problem.
-
-### 2 · Ownership on catch-record deletion
-
-`POST /api/catch-records` takes the owner from the token and ignores the body, which is
-right. `DELETE /api/catch-records/{id}` checks only that the caller is authenticated.
-Load the record, compare the owner against the authenticated principal, and let
-`ROLE_ADMIN` through as the exception rather than the rule.
-
-While there: **not-yours and not-found should answer the same.** A distinct `403`
-confirms the record exists to whoever is probing ids.
-
-### 3 · Remove the `jwt.secret` fallback
-
-```properties
-jwt.secret=${JWT_SECRET:ChaveTemporaria...}
-```
-
-The default exists so a fresh clone boots. The consequence is that an environment
-missing `JWT_SECRET` also boots — and signs tokens with a value published in this
-repository, so anyone could mint a valid token for any e-mail address.
-
-A secret should have no default, for the same reason `DB_URL` has none: a missing
-variable must break the boot loudly. Combine with a startup check that refuses to
-start if the key is shorter than 32 characters, so the failure is a clear message
-rather than a `WeakKeyException` at the first login.
-
-### 4 · Close the image endpoint
-
-`POST /api/images/upload` is `permitAll`, with no size limit and no content-type
-allowlist, writing into the project's Cloudinary account. Require authentication, cap
-the multipart size in configuration, and accept only image content types.
-
-### 5 · Rate limiting
+### 1 · Rate limiting
 
 Nothing is limited. Login, registration and password reset can each be automated
 against as fast as the network allows, and the free tiers behind them (SMTP quota,
@@ -69,22 +57,23 @@ The right layer is the edge rather than a counter inside a service — Render's 
 controls, or a gateway in front. Bucket4j on the auth endpoints is the in-process
 fallback if the edge is not available.
 
-### 6 · Harden the password-reset flow
+This one has not simply been deferred for time. An in-process limiter behind Render's
+proxy sees one source address for every request unless `X-Forwarded-For` is parsed, and
+a limiter that gets that wrong throttles the entire user base as though it were a
+single client — a worse failure than the gap it closes. The decision is which layer,
+not whether.
 
-Three separate problems on one endpoint:
+### 2 · An attempt counter on the reset code
 
-- **No captcha**, unlike register and login.
-- **It confirms whether an account exists** — *"Não encontramos uma conta com este
-  e-mail"* — which is e-mail enumeration, and free. Always answer *"if an account
-  exists, a code has been sent"*.
-- **The OTP comes from `java.util.Random`**, a predictable PRNG. Use `SecureRandom`.
-  While there, `nextInt(999999)` never produces `999999` — the correct range is
-  `nextInt(1_000_000)`.
+The reset flow no longer leaks who exists, and the code now comes from `SecureRandom` —
+but a six-digit code has a million values and fifteen minutes of life, and nothing
+counts how many guesses arrive inside that window.
 
-Add a per-account attempt counter, so a six-digit code cannot be brute-forced inside
-its fifteen-minute window.
+A per-account counter that invalidates the code after a handful of wrong attempts is
+the fix, and it is independent of item 1: rate limiting bounds the request rate, and
+this bounds the total guesses against one code.
 
-### 7 · A password policy
+### 3 · A password policy
 
 Nothing checks length or composition today, so a one-character password is accepted.
 A minimum length is the whole of the useful part; composition rules mostly produce
@@ -94,7 +83,7 @@ worse passwords.
 
 ## Then the foundations
 
-### 8 · Flyway, and `ddl-auto=validate`
+### 4 · Flyway, and `ddl-auto=validate`
 
 `ddl-auto=update` never drops, never alters, leaves no record of what ran, and gives
 the application permission to reshape production's schema at boot.
@@ -105,27 +94,27 @@ migrating. This unblocks two things that are otherwise impossible: renaming
 `catch_record` to `tb_catch_record`, and moving `catch_date` from `LocalDateTime` to
 `OffsetDateTime`.
 
-### 9 · A real test suite
+### 5 · A real test suite
 
 One test exists — `contextLoads` — and it needs a live database. The shape it should
 grow into is set out in [Running and deploying](05-deployment.md#testing). The single
 most valuable first test is the JWT contract, because that is the only place where a
 silent regression is an authentication bypass rather than a broken screen.
 
-### 10 · CI
+### 6 · CI
 
 There is no pipeline in this repository. A GitHub Actions workflow running
 `./mvnw verify` on JDK 21 for every push and pull request, plus a credential-format
 scan over the history, is a morning's work and stops the next regression from reaching
 Render.
 
-### 11 · A local database, and a `docker-compose.yml`
+### 7 · A local database, and a `docker-compose.yml`
 
 `application-local.properties` currently points at the same Supabase instance the
 deployed API uses, so local development writes to production data. A compose file with
 PostgreSQL, and a local profile pointing at it, removes an entire category of accident.
 
-### 12 · Backend error tracking
+### 8 · Backend error tracking
 
 Sentry is in the frontend. A server-side exception appears in Render's log stream and
 nowhere else. Add `sentry-spring-boot-starter`, and Spring Boot Actuator with a health
@@ -135,7 +124,7 @@ any monitoring at all.
 While there: turn off `spring.jpa.show-sql` outside local, and replace
 `e.printStackTrace()` in `JwtAuthenticationFilter` with a logger.
 
-### 13 · An exception hierarchy
+### 9 · An exception hierarchy
 
 `GlobalExceptionHandler` maps every `RuntimeException` to `404`, so a genuine server
 fault is reported as "not found". Introduce `NotFoundException`,
@@ -149,7 +138,7 @@ comma-joined string, so the frontend can put each message next to its input.
 
 ## Then the product
 
-### 14 · Expose Swagger
+### 10 · Expose Swagger
 
 `springdoc-openapi` is on the classpath and both `/v3/api-docs` and
 `/swagger-ui/**` fall through to `anyRequest().authenticated()`, so the explorer cannot
@@ -160,7 +149,7 @@ be local-only.
 Then annotate: `@Operation`, `@ApiResponse`, and a `SecurityScheme` for the bearer
 token so the *Authorize* button works.
 
-### 15 · Return what the API already stores
+### 11 · Return what the API already stores
 
 Two relationships are writable and not readable:
 
@@ -171,7 +160,7 @@ Two relationships are writable and not readable:
 
 Neither needs a schema change.
 
-### 16 · Deduplicate fishing spots
+### 12 · Deduplicate fishing spots
 
 Every catch record posted with coordinates creates a new `tb_fishing_spot` row. Two
 records from the same rock produce two spots, and the table grows once per catch rather
@@ -182,7 +171,7 @@ metres is the right order — and reuse the match. This is the direct cost of th
 project's central decision, and the decision is still right; the deduplication is the
 part that was deferred.
 
-### 17 · Enforce the closed seasons
+### 13 · Enforce the closed seasons
 
 `tb_fishing_regulation` stores *piracema* periods and nothing consults them. Posting a
 catch record dated inside a closed season is accepted silently.
@@ -197,20 +186,20 @@ This also needs the basin promoted from free text to its own table, because matc
 `tb_fishing_regulation.hydrographic_basin` by string is what makes the check
 unreliable.
 
-### 18 · Fix `diasNaAgua`
+### 14 · Fix `diasNaAgua`
 
 The fisher ranking counts `COUNT(DISTINCT c.catchDate)` — distinct *timestamps*. Two
 catches an hour apart on one trip count as two days. `COUNT(DISTINCT CAST(c.catchDate
 AS date))` is the fix.
 
-### 19 · Private logbooks
+### 15 · Private logbooks
 
 Every catch record is public, which is the product's premise and is right for the
 leaderboards. A per-record visibility flag would let a fisher keep a spot to themselves
 without leaving the app — the single most requested thing in any fishing community,
 because a good spot stops being good once it is on a map.
 
-### 20 · Sorting, properly
+### 16 · Sorting, properly
 
 `sortBy` is passed straight to `Sort.by(...)`, so an unknown property becomes a runtime
 failure rather than a `400`, and the direction is fixed per endpoint rather than chosen
@@ -224,8 +213,8 @@ by the caller. Validate the property against an allowlist per resource and accep
 | Item | Where |
 |---|---|
 | `@EnableAsync` is missing, so `EmailService`'s `@Async` methods run on the request thread | `BrazilApplication` |
-| `CatchRecord` has no `@Table`, so it is `catch_record` while every sibling is `tb_*` | needs item 8 first |
-| `catch_date` is `LocalDateTime` — no time zone | needs item 8 first |
+| `CatchRecord` has no `@Table`, so it is `catch_record` while every sibling is `tb_*` | needs item 4 first |
+| `catch_date` is `LocalDateTime` — no time zone | needs item 4 first |
 | `CatchRecord` declares no `equals`/`hashCode`, unlike all twelve other entities | `entity/CatchRecord.java` |
 | `RiverSpeciesRepository` has no uniqueness constraint on `(river_id, fish_id)` | duplicate pairings are accepted |
 | `FishService.save` drops unknown bait and equipment ids silently — `findAllById` returns what it finds | `service/FishService.java` |

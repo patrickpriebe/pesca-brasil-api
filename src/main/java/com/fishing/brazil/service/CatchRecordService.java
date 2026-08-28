@@ -7,11 +7,13 @@ import com.fishing.brazil.dto.response.ranking.RankingPescadorResponseDTO;
 import com.fishing.brazil.entity.CatchRecord;
 import com.fishing.brazil.entity.FishingSpot;
 import com.fishing.brazil.entity.login.User;
+import com.fishing.brazil.enums.login.RoleName;
 import com.fishing.brazil.repository.*;
 import com.fishing.brazil.repository.login.UserRepository;
 import com.fishing.brazil.repository.projection.RankingPescadorProjection;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -111,7 +113,24 @@ public class CatchRecordService {
 
     @Transactional
     public void delete(Long id) {
-        catchRecordRepository.deleteById(id);
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+        CatchRecord record = catchRecordRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Registro de captura não encontrado."));
+
+        boolean isAdmin = authentication.getAuthorities().stream()
+                .anyMatch(authority -> RoleName.ROLE_ADMIN.name().equals(authority.getAuthority()));
+
+        boolean isOwner = record.getUser() != null
+                && record.getUser().getEmail().equals(authentication.getName());
+
+        // Um registro de outra pessoa responde igual a um registro inexistente: um 403
+        // confirmaria a existência do registro para quem estiver testando ids.
+        if (!isOwner && !isAdmin) {
+            throw new RuntimeException("Registro de captura não encontrado.");
+        }
+
+        catchRecordRepository.delete(record);
     }
 
     private CatchRecordResponseDTO convertToResponseDTO(CatchRecord record) {

@@ -11,6 +11,7 @@ are.
 - [Why the filter reads the database](#why-the-filter-reads-the-database)
 - [The authorization model](#the-authorization-model)
 - [reCAPTCHA](#recaptcha)
+- [The reset flow does not confirm who exists](#the-reset-flow-does-not-confirm-who-exists)
 - [CORS](#cors)
 - [Secrets](#secrets)
 - [Known gaps](#known-gaps)
@@ -167,16 +168,17 @@ Anything else answers `401` with *"Token inválido."*
 
 ## The authorization model
 
-Four rules, in order, from `SecurityConfig`:
+Three rules in the filter chain, from `SecurityConfig`:
 
 | # | Matcher | Effect |
 |---|---|---|
 | 1 | `/api/auth/**` | Public — registration and login cannot require a token |
-| 2 | `/api/images/**` | Public |
-| 3 | `GET /api/**` | Public |
-| 4 | everything else | Authenticated |
+| 2 | `GET /api/**` | Public |
+| 3 | everything else | Authenticated |
 
-Rule 3 is the product decision, stated as configuration: **the catalogue and the
+and `@EnableMethodSecurity` on top of them, so individual handlers can ask for more.
+
+Rule 2 is the product decision, stated as configuration: **the catalogue and the
 logbook are public.** Anyone can read the fish, the rivers, the closed seasons, the
 leaderboards and every catch record without an account. That is what the product is —
 a public record of Brazilian sport fishing — and requiring a login to browse it would
@@ -188,51 +190,78 @@ session cookie there is no ambient credential for a cross-site request to ride o
 the bearer token must be attached explicitly by JavaScript that the attacker's page
 cannot run against our origin.
 
-### Roles exist but are not enforced
+### Two kinds of write, two different bars
 
-`ROLE_ADMIN` and `ROLE_PESCADOR` are seeded at boot, attached to users, loaded into the
-`SecurityContext` as authorities, and returned to the client on login — which uses them
-to decide what to render.
+Being authenticated is not one permission. The API distinguishes three levels, because
+the blast radius of the three operations is not the same:
 
-They are **not checked anywhere on the server.** There is no `@PreAuthorize`, no
-`@Secured`, no `hasRole(...)` in the filter chain; the only distinction the API makes
-is authenticated versus not. Every write endpoint therefore accepts any verified
-fisher, and the admin distinction currently lives entirely in the frontend, which is to
-say it lives nowhere enforceable.
+| Operation | Requires | Reason |
+|---|---|---|
+| Read anything | nothing | The product is a public record |
+| `POST /api/catch-records` | a valid token | Logging a catch is what a fisher does |
+| `DELETE /api/catch-records/{id}` | token **and** ownership | It is their record, not anyone's |
+| Every catalogue write | token **and** `ROLE_ADMIN` | It changes what everybody sees |
 
-Closing this is the top security item on the [roadmap](06-roadmap.md), and it is
-mechanical: enable method security and require `ROLE_ADMIN` on catalogue writes, and
-require ownership on catch-record deletion. It is written down here rather than left
-implicit because an authorization gap that nobody has named is one nobody fixes.
+Catalogue writes are the `POST` and `DELETE` handlers on fish, baits, equipment,
+rivers, river species, fishing spots and regulations — fourteen handlers, each carrying
+`@PreAuthorize("hasRole('ADMIN')")`, enabled by `@EnableMethodSecurity` on
+`SecurityConfig`. `hasRole('ADMIN')` matches the authority `ROLE_ADMIN`, which is
+exactly what `CustomUserDetailsService` builds from `RoleName`.
 
-### Ownership is enforced on write and not on delete
+**No endpoint grants `ROLE_ADMIN`.** Registration always assigns `ROLE_PESCADOR`, and
+promoting an account is a deliberate database operation:
 
-`POST /api/catch-records` takes the owner from the `SecurityContext` — the request body
-has no user field, so a client cannot post a record as somebody else. That is the right
-pattern, and it is worth stating as a rule: **identity is derived from the token, never
-read from the payload.**
+```sql
+INSERT INTO tb_user_roles (user_id, role_id)
+SELECT u.id, r.id FROM tb_user u, tb_role r
+WHERE u.email = 'you@example.com' AND r.name = 'ROLE_ADMIN';
+```
 
-`DELETE /api/catch-records/{id}` does not apply the same rule. It checks that the
-caller is authenticated and deletes by id. Same roadmap item.
+That is on purpose. A registration endpoint able to hand out the role that guards the
+catalogue would not be guarding it.
 
-### The image endpoint is open
+### Identity is derived from the token, never read from the payload
 
-`/api/images/**` is `permitAll`, so `POST /api/images/upload` accepts a file with no
-token. There is no declared size limit, no content-type allowlist and no rate limit, and
-every accepted file is stored in Cloudinary under the project's account.
+`POST /api/catch-records` takes the owner from the `SecurityContext`, and
+`CatchRecordRequestDTO` has no user field at all — so a client cannot post a record as
+somebody else, not because a check rejects the attempt but because there is nowhere to
+put the lie.
 
-It is public because the upload happens on the registration-adjacent part of the client
-flow and requiring a token there was inconvenient. That is a reason, not a
-justification; requiring authentication and adding a size and type limit is on the
-roadmap.
+`DELETE /api/catch-records/{id}` applies the same identity to the other direction: it
+loads the record, compares its owner's e-mail against the authenticated principal, and
+lets `ROLE_ADMIN` through as the exception.
+
+**Not-yours and not-found answer the same.** Both throw the identical
+*"Registro de captura não encontrado."*, which the handler turns into a `404`. A
+distinct `403` would confirm to whoever is walking the id space that the record exists,
+and the mere existence of somebody's catch record is already their information.
+
+### The image endpoint
+
+`POST /api/images/upload` requires a token. It falls through the filter chain to
+`anyRequest().authenticated()` — there is no `permitAll` for `/api/images/**`, and the
+frontend's HTTP interceptor already attaches the bearer token to every call, so nothing
+on the client side had to change.
+
+Two limits sit on top of that:
+
+- **5 MB**, through `spring.servlet.multipart.max-file-size` and `max-request-size`.
+  Declared in configuration rather than checked in code, so the request is rejected
+  before the bytes are buffered.
+- **Images only.** The handler refuses any `Content-Type` that does not start with
+  `image/`, and refuses an empty file.
+
+The content-type check is a client-declared header and therefore not proof of anything;
+it is there so the endpoint does not become general-purpose file storage by accident.
+Verifying the actual bytes is Cloudinary's job, and it does it.
 
 ---
 
 ## reCAPTCHA
 
 `RecaptchaService` posts the client's token to Google's `siteverify` and rejects
-anything that does not come back `success: true`. It is wired into **register** and
-**login**.
+anything that does not come back `success: true`. It is wired into **register**,
+**login** and **forgot-password**.
 
 Two properties:
 
@@ -240,12 +269,38 @@ Two properties:
   missing secret — becomes a `RuntimeException` and the request is refused. Failing
   open would silently remove the only bot defence on the account endpoints, and a
   registration form is exactly where that matters.
-- **It runs before anything else.** The captcha check is the first statement in both
-  handlers, so a bot never reaches the password comparison and never learns anything
-  about which e-mails exist.
+- **It runs before anything else.** The captcha check is the first statement in all
+  three handlers, so a bot never reaches the password comparison and never learns
+  anything about which e-mails exist.
 
-`forgot-password` has **no captcha**, which makes it the cheapest endpoint to automate
-against. Listed below.
+`ForgotPasswordRequestDTO` therefore carries a `recaptchaToken` alongside the e-mail.
+
+---
+
+## The reset flow does not confirm who exists
+
+Three changes make `forgot-password` and `reset-password` say nothing about whether an
+account is registered:
+
+**`generatePasswordResetToken` no longer throws when the e-mail is unknown.** It looks
+the user up with `ifPresent` and does nothing when there is no match. The controller
+answers *"Se existir uma conta com este e-mail, enviamos um código de recuperação."*
+either way, so the only signal that an address is registered is the message that
+arrives in that inbox.
+
+**`resetPassword` returns one message for three different failures** — unknown e-mail,
+wrong code, expired code — all *"Código de segurança inválido ou expirado. Solicite um
+novo."* Separate messages would put the membership check back one endpoint further
+along.
+
+**The code comes from `SecureRandom`.** It is a six-digit credential with a
+fifteen-minute life, and `java.util.Random` is a linear congruential generator whose
+future output is derivable from a short run of past output. The range is
+`nextInt(1_000_000)`, which reaches `999999`; `nextInt(999999)` never does.
+
+What is still missing is an attempt counter. A six-digit code has a million values and
+fifteen minutes of life, and nothing currently limits how many guesses arrive in that
+window — see [Known gaps](#known-gaps).
 
 ---
 
@@ -278,7 +333,7 @@ Nothing sensitive is committed. `application.properties` holds only the shape:
 spring.datasource.url=${DB_URL:}
 cloudinary.api-secret=${CLOUDINARY_API_SECRET:}
 google.recaptcha.secret=${RECAPTCHA_SECRET:}
-jwt.secret=${JWT_SECRET:ChaveTemporaria...}
+jwt.secret=${JWT_SECRET}
 ```
 
 Real values live in Render's environment panel in the deployed environment, and in
@@ -292,12 +347,18 @@ Two things about that block deserve naming:
 boot rather than connecting to something unintended. A default would be worse than an
 absence.
 
-**`jwt.secret` has a fallback, and that is wrong.** It is there so a fresh clone starts
-without configuration, but the consequence is that an environment which forgets to set
-`JWT_SECRET` boots successfully and signs tokens with a value that is in this
-repository — meaning anybody could mint a valid token for any e-mail address. A secret
-should have no default at all, for the same reason the database URL has none. Removing
-the fallback is on the roadmap.
+**`jwt.secret` has no default at all**, which is stricter still. `${JWT_SECRET}` with no
+`:` means Spring cannot resolve the placeholder when the variable is absent, and the
+context fails to start. The earlier version carried a literal fallback so a fresh clone
+would boot — and the cost of that convenience was that an environment which forgot the
+variable also booted, signing tokens with a string published in this repository.
+Anybody reading the repo could then mint a valid token for any e-mail address.
+
+`JwtUtil` adds a second check at construction time: a secret shorter than 32 characters
+throws `IllegalStateException` with a message naming the property. HS256 needs a
+256-bit key, and without the check the failure surfaces as a `WeakKeyException` at the
+first login attempt — at runtime, in a code path nobody is watching, saying nothing
+about which variable is wrong.
 
 ---
 
@@ -308,16 +369,30 @@ matter.
 
 | Gap | Consequence |
 |---|---|
-| **Roles are never checked server-side** | Any verified account can write to the catalogue; `ROLE_ADMIN` is decorative |
-| **No ownership check on catch-record deletion** | Deletion is authenticated but not authorised |
-| **`jwt.secret` has a committed default** | An environment missing the variable signs with a public key |
-| **Image upload is unauthenticated and unbounded** | Anonymous writes to the project's Cloudinary account |
-| **Nothing is rate limited** | Login, registration and password reset can be automated against freely |
-| **`forgot-password` has no captcha, and confirms whether an account exists** | E-mail enumeration, cheaply |
-| **OTP uses `java.util.Random`** | A predictable PRNG where `SecureRandom` belongs. `nextInt(999999)` also never produces `999999` |
+| **Nothing is rate limited** | Login, registration and password reset can be automated against freely; the six-digit reset code has no attempt counter |
 | **No password policy** | A one-character password is accepted |
+| **Tokens cannot be revoked** | A leaked token is valid for up to 24 hours. The per-request database read is what stops a *disabled* account from surviving that window |
 | **`e.printStackTrace()` in the JWT filter** | Stack traces to stdout instead of the logger |
-| **Tokens cannot be revoked** | A leaked token is valid for up to 24 hours |
 | **No security headers** | No CSP, HSTS or `X-Content-Type-Options` on API responses |
 
 Each of these has a corresponding entry in the [roadmap](06-roadmap.md).
+
+Rate limiting is the one that has not simply been deferred for time. The right layer is
+the edge — Render's own controls, or a gateway — rather than a counter inside a service,
+and an in-process limiter sitting behind Render's proxy would see one source address
+for all traffic unless `X-Forwarded-For` is parsed correctly. Get that wrong and the
+limiter throttles every user as though they were a single client, which is a worse
+failure than the gap it closes. The decision is still open.
+
+### Closed since this document was first written
+
+Kept here so the history is legible rather than erased.
+
+| Was | Now |
+|---|---|
+| Roles never checked server-side | `@EnableMethodSecurity`, and `hasRole('ADMIN')` on all fourteen catalogue write handlers |
+| Catch-record deletion authenticated but not owned | Owner compared against the principal; `ROLE_ADMIN` excepted; not-yours answers as not-found |
+| `jwt.secret` carried a committed fallback | No default, plus a 32-character minimum enforced at construction |
+| Image upload unauthenticated and unbounded | Token required, 5 MB cap, `image/*` only, empty file refused |
+| `forgot-password` had no captcha and confirmed account existence | Captcha added; identical response either way; `reset-password` collapsed to one failure message |
+| OTP from `java.util.Random`, range missing a value | `SecureRandom`, `nextInt(1_000_000)` |

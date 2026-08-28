@@ -9,6 +9,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -32,11 +33,13 @@ public class BaitController {
         return ResponseEntity.ok(baitService.findBaits(name, pageable));
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping
     public ResponseEntity<BaitResponseDTO> createBait(@RequestBody BaitRequestDTO dto) {
         return ResponseEntity.status(HttpStatus.CREATED).body(baitService.save(dto));
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteBait(@PathVariable Long id) {
         baitService.delete(id);

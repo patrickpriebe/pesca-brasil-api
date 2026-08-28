@@ -9,6 +9,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -31,11 +32,13 @@ public class EquipmentController {
         return ResponseEntity.ok(equipmentService.findAll(pageable));
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @PostMapping
     public ResponseEntity<EquipmentResponseDTO> createEquipment(@RequestBody EquipmentRequestDTO dto) {
         return ResponseEntity.status(HttpStatus.CREATED).body(equipmentService.save(dto));
     }
 
+    @PreAuthorize("hasRole('ADMIN')")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteEquipment(@PathVariable Long id) {
         equipmentService.delete(id);

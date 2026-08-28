@@ -59,15 +59,16 @@ curl "http://localhost:8080/api/fishes?size=5"
 
 ### What you need for each flow
 
-The application boots with any of these unset, and the flows that need them fail at
-call time rather than at startup:
+`jwt.secret` is required to boot at all. The rest may be unset, and the flows that
+need them fail at call time rather than at startup:
 
 | To exercise | You need |
 |---|---|
-| Any read | PostgreSQL only |
-| Registration and login | reCAPTCHA secret **and** SMTP credentials |
-| Photo upload | Cloudinary credentials |
-| Anything authenticated | `jwt.secret`, at least 32 characters |
+| Booting | `jwt.secret`, at least 32 characters |
+| Any read | PostgreSQL |
+| Registration, login and password reset | reCAPTCHA secret **and** SMTP credentials |
+| Photo upload | Cloudinary credentials, and a token |
+| Catalogue writes | An account holding `ROLE_ADMIN` — see [Granting `ROLE_ADMIN`](#granting-role_admin) |
 
 Registration is the awkward one locally: without a working reCAPTCHA secret the
 endpoint refuses every request, because the service
@@ -94,16 +95,33 @@ Every value the application reads, and where it comes from.
 | `cloudinary.api-secret` | `CLOUDINARY_API_SECRET` | *(empty)* | for uploads |
 | `spring.mail.username` | `MAIL_USER` | *(empty)* | for registration |
 | `spring.mail.password` | `MAIL_PASSWORD` | *(empty)* | for registration |
-| `google.recaptcha.secret` | `RECAPTCHA_SECRET` | *(empty)* | for register/login |
-| `jwt.secret` | `JWT_SECRET` | **a committed placeholder** | yes |
+| `google.recaptcha.secret` | `RECAPTCHA_SECRET` | *(empty)* | for register/login/reset |
+| `jwt.secret` | `JWT_SECRET` | **none** | yes — the boot fails without it |
 
 Fixed in `application.properties` and not overridable per environment: the Postgres
-dialect, `ddl-auto=update`, SQL logging, and Gmail's SMTP host, port and 5-second
-timeouts.
+dialect, `ddl-auto=update`, SQL logging, Gmail's SMTP host, port and 5-second timeouts,
+and the 5 MB multipart cap (`spring.servlet.multipart.max-file-size` and
+`max-request-size`).
 
-> `JWT_SECRET` is the one variable with a fallback. An environment that forgets to set
-> it boots anyway and signs tokens with a value published in this repository. See
-> [Security](04-security.md#secrets).
+> **`JWT_SECRET` has no default.** `${JWT_SECRET}` with no `:` means Spring cannot
+> resolve the placeholder when the variable is absent, and the context fails to start —
+> deliberately, so a forgotten variable is a failed deploy rather than tokens signed
+> with a string anybody can read in this repository. `JwtUtil` additionally refuses a
+> secret shorter than 32 characters. See [Security](04-security.md#secrets).
+
+### Granting `ROLE_ADMIN`
+
+Catalogue writes require `ROLE_ADMIN`, and no endpoint hands it out — registration
+always assigns `ROLE_PESCADOR`. Promoting an account is a database operation:
+
+```sql
+INSERT INTO tb_user_roles (user_id, role_id)
+SELECT u.id, r.id FROM tb_user u, tb_role r
+WHERE u.email = 'you@example.com' AND r.name = 'ROLE_ADMIN';
+```
+
+`RoleDataLoader` guarantees both rows exist in `tb_role` after any boot, so this can be
+run against a freshly created database without seeding anything first.
 
 ---
 

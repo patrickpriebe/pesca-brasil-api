@@ -10,12 +10,19 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.security.SecureRandom;
 import java.time.LocalDateTime;
-import java.util.Random;
 
 @Service
 @Transactional(readOnly = true)
 public class UserService {
+
+    // SecureRandom, e nao Random: o codigo de seis digitos e uma credencial de curta
+    // duracao, e um PRNG previsivel deixa de proteger a conta assim que a sequencia
+    // for observada algumas vezes.
+    private static final SecureRandom OTP_GENERATOR = new SecureRandom();
+    private static final int OTP_UPPER_BOUND = 1_000_000;
+    private static final int OTP_VALIDITY_MINUTES = 15;
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
@@ -42,9 +49,9 @@ public class UserService {
 
         newUser.setEnabled(false);
 
-        String otp = String.format("%06d", new Random().nextInt(999999));
+        String otp = generateOtp();
         newUser.setVerificationCode(otp);
-        newUser.setVerificationCodeExpiresAt(LocalDateTime.now().plusMinutes(15)); // Expira em 15 min
+        newUser.setVerificationCodeExpiresAt(LocalDateTime.now().plusMinutes(OTP_VALIDITY_MINUTES));
 
         Role userRole = roleRepository.findByName(RoleName.ROLE_PESCADOR)
                 .orElseThrow(() -> new RuntimeException("Perfil de acesso não encontrado."));
@@ -80,31 +87,42 @@ public class UserService {
         userRepository.save(user);
     }
 
+    /**
+     * Nao sinaliza se a conta existe. Responder "nao encontramos uma conta com este
+     * e-mail" transforma o endpoint em um verificador de cadastro que qualquer um pode
+     * percorrer; quem realmente tem a conta recebe o codigo, e quem nao tem recebe a
+     * mesma resposta do controller.
+     */
     @Transactional
     public void generatePasswordResetToken(String email) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Não encontramos uma conta com este e-mail."));
+        userRepository.findByEmail(email).ifPresent(user -> {
+            String otp = generateOtp();
+            user.setVerificationCode(otp);
+            user.setVerificationCodeExpiresAt(LocalDateTime.now().plusMinutes(OTP_VALIDITY_MINUTES));
 
-        String otp = String.format("%06d", new Random().nextInt(999999));
-        user.setVerificationCode(otp);
-        user.setVerificationCodeExpiresAt(LocalDateTime.now().plusMinutes(15));
+            userRepository.save(user);
 
-        userRepository.save(user);
-
-        emailService.sendPasswordResetEmail(user.getEmail(), user.getName(), otp);
+            emailService.sendPasswordResetEmail(user.getEmail(), user.getName(), otp);
+        });
     }
 
     @Transactional
     public void resetPassword(String email, String code, String newPassword) {
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("Usuário não encontrado."));
+        // Uma unica mensagem para e-mail inexistente, codigo errado e codigo expirado:
+        // mensagens distintas responderiam se a conta existe, que e exatamente o que
+        // generatePasswordResetToken deixou de responder.
+        String genericFailure = "Código de segurança inválido ou expirado. Solicite um novo.";
 
-        if (user.getVerificationCodeExpiresAt() == null || user.getVerificationCodeExpiresAt().isBefore(LocalDateTime.now())) {
-            throw new RuntimeException("O código de segurança expirou. Solicite um novo.");
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException(genericFailure));
+
+        if (user.getVerificationCodeExpiresAt() == null
+                || user.getVerificationCodeExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new RuntimeException(genericFailure);
         }
 
-        if (!user.getVerificationCode().equals(code)) {
-            throw new RuntimeException("Código de segurança inválido.");
+        if (user.getVerificationCode() == null || !user.getVerificationCode().equals(code)) {
+            throw new RuntimeException(genericFailure);
         }
 
         user.setPassword(passwordEncoder.encode(newPassword));
@@ -112,5 +130,9 @@ public class UserService {
         user.setVerificationCodeExpiresAt(null);
 
         userRepository.save(user);
+    }
+
+    private String generateOtp() {
+        return String.format("%06d", OTP_GENERATOR.nextInt(OTP_UPPER_BOUND));
     }
 }
