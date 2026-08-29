@@ -2,6 +2,7 @@ package com.fishing.brazil.service;
 
 import com.fishing.brazil.dto.request.BaitRequestDTO;
 import com.fishing.brazil.dto.response.BaitResponseDTO;
+import com.fishing.brazil.exception.NotFoundException;
 import com.fishing.brazil.entity.Bait;
 import com.fishing.brazil.repository.BaitRepository;
 import org.springframework.data.domain.Page;
@@ -46,6 +47,9 @@ public class BaitService {
 
     @Transactional
     public void delete(Long id) {
+        if (!baitRepository.existsById(id)) {
+            throw new NotFoundException("Isca não encontrada.");
+        }
         baitRepository.deleteById(id);
     }
 

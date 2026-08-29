@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Um push novo cancela a execucao anterior do mesmo branch: nada util sai de terminar
+# a verificacao de um commit que ja foi substituido.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build e testes
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: mvnw verify
+        run: ./mvnw --batch-mode verify
+
+      # Os relatorios sao o que permite ler uma falha sem reproduzir localmente.
+      - name: Relatórios de teste
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+
+  secrets:
+    name: Varredura de segredos
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # O historico inteiro: um segredo removido no commit seguinte continua no
+          # historico, e e de la que ele vaza.
+          fetch-depth: 0
+
+      - name: Procurar credenciais por formato
+        run: |
+          set -euo pipefail
+
+          # Formatos, e nao palavras: procurar por "password" acha comentarios, enquanto
+          # procurar pelo formato de uma chave acha a chave.
+          PATTERNS='(AKIA[0-9A-Z]{16})|(-----BEGIN [A-Z ]*PRIVATE KEY-----)|(sk_live_[0-9a-zA-Z]{10,})|(ghp_[0-9a-zA-Z]{30,})|(postgres(ql)?://[^:@/[:space:]]+:[^@/[:space:]]+@)'
+
+          FOUND=0
+          while read -r commit; do
+            while read -r file; do
+              [ -z "$file" ] && continue
+              if git show "$commit:$file" 2>/dev/null | grep -Eq "$PATTERNS"; then
+                # O commit e o arquivo, nunca a linha: o log da execucao e publico.
+                echo "::error::Credencial em formato reconhecido no commit $commit, arquivo $file"
+                FOUND=1
+              fi
+            done < <(git diff-tree --no-commit-id --name-only -r "$commit" 2>/dev/null || true)
+          done < <(git rev-list --all)
+
+          if [ "$FOUND" -ne 0 ]; then
+            exit 1
+          fi
+          echo "Nenhuma credencial encontrada no histórico."
+
+      - name: Conferir que a configuração local não está versionada
+        run: |
+          if git log --all --name-only --pretty=format: -- '*application-local.properties' | grep -q .; then
+            echo "::error::application-local.properties aparece no histórico do repositório"
+            exit 1
+          fi
+          echo "application-local.properties nunca foi versionado."
+
+  image:
+    name: Build da imagem
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build sem push: o objetivo e saber que o Dockerfile continua valido, e nao
+      # publicar em lugar nenhum.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: pesca-brasil-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

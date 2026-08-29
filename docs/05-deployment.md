@@ -2,7 +2,9 @@
 
 - [Running locally](#running-locally)
 - [Configuration](#configuration)
+- [Granting ROLE_ADMIN](#granting-role_admin)
 - [Docker](#docker)
+- [Continuous integration](#continuous-integration)
 - [The deployed environment](#the-deployed-environment)
 - [Constraints that shaped the setup](#constraints-that-shaped-the-setup)
 - [Testing](#testing)
@@ -11,33 +13,26 @@
 
 ## Running locally
 
-**Requirements:** JDK 21 and a PostgreSQL database. There is no `docker-compose.yml` —
-the local setup points at the same managed Postgres as the deployed environment, which
-is convenient and is a limitation, discussed below.
+**Requirements:** JDK 21, and Docker for the database.
 
 ```bash
 git clone https://github.com/patrickpriebe/pesca-brasil-api.git
 cd pesca-brasil-api
+docker compose up -d
 ```
 
-Create `src/main/resources/application-local.properties`. The file is git-ignored, so it
-will not be committed:
+That brings up PostgreSQL on **5433** — 5432 is usually taken by a native install; inside
+the compose network it is still `postgres:5432`.
 
-```properties
-spring.datasource.url=jdbc:postgresql://localhost:5432/pescabrasil
-spring.datasource.username=postgres
-spring.datasource.password=postgres
+Then copy the example configuration and fill in what you need:
 
-cloudinary.cloud-name=your-cloud
-cloudinary.api-key=your-key
-cloudinary.api-secret=your-secret
-
-spring.mail.username=you@gmail.com
-spring.mail.password=your-app-password
-
-google.recaptcha.secret=your-recaptcha-secret
-jwt.secret=a-secret-of-at-least-32-characters-for-HS256
+```bash
+cp src/main/resources/application-local.properties.example \
+   src/main/resources/application-local.properties
 ```
+
+The real file is git-ignored; the example is not, so the shape of the configuration is
+in the repository and the values never are.
 
 ```bash
 ./mvnw spring-boot:run
@@ -47,8 +42,8 @@ The application listens on **8080**. `spring.profiles.active=local` is set in
 `application.properties`, so the local file is picked up without a flag.
 
 Hibernate creates the schema on first boot — see
-[Data model](02-data-model.md#schema-ownership) for what `ddl-auto=update` does and
-does not do. `RoleDataLoader` seeds `ROLE_ADMIN` and `ROLE_PESCADOR` on every boot,
+[Data model](02-data-model.md#schema-ownership) for what `ddl-auto=update` does and does
+not do. `RoleDataLoader` seeds `ROLE_ADMIN` and `ROLE_PESCADOR` on every boot,
 idempotently.
 
 A first request that needs no data:
@@ -57,27 +52,28 @@ A first request that needs no data:
 curl "http://localhost:8080/api/fishes?size=5"
 ```
 
+With the example configuration, Swagger is open at
+**http://localhost:8080/swagger-ui/index.html** — `pescabrasil.openapi.public=true` is
+set there and defaults to `false` everywhere else.
+
 ### What you need for each flow
 
-`jwt.secret` is required to boot at all. The rest may be unset, and the flows that
-need them fail at call time rather than at startup:
+`jwt.secret` is required to boot at all. The rest may be unset, and the flows that need
+them fail at call time rather than at startup:
 
 | To exercise | You need |
 |---|---|
-| Booting | `jwt.secret`, at least 32 characters |
+| Booting | `jwt.secret`, at least 32 characters — there is no default |
 | Any read | PostgreSQL |
 | Registration, login and password reset | reCAPTCHA secret **and** SMTP credentials |
 | Photo upload | Cloudinary credentials, and a token |
-| Catalogue writes | An account holding `ROLE_ADMIN` — see [Granting `ROLE_ADMIN`](#granting-role_admin) |
+| Catalogue writes | An account holding `ROLE_ADMIN` — see below |
 
-Registration is the awkward one locally: without a working reCAPTCHA secret the
-endpoint refuses every request, because the service
-[fails closed](04-security.md#recaptcha). Google's documented test keys are the usual
-way through this, and inserting a pre-verified user directly into `tb_user` with a
-BCrypt hash is the other.
-
-`spring.jpa.show-sql=true` and `format_sql=true` are on, so every statement Hibernate
-issues is printed. Useful locally, noisy in production — see the roadmap.
+Registration is the awkward one locally: without a working reCAPTCHA secret the endpoint
+refuses every request, because the service
+[fails closed](04-security.md#recaptcha). Google's documented test keys are the usual way
+through this, and inserting a pre-verified user directly into `tb_user` with a BCrypt
+hash is the other.
 
 ---
 
@@ -90,29 +86,41 @@ Every value the application reads, and where it comes from.
 | `spring.datasource.url` | `DB_URL` | *(empty)* | yes |
 | `spring.datasource.username` | `DB_USER` | *(empty)* | yes |
 | `spring.datasource.password` | `DB_PASSWORD` | *(empty)* | yes |
+| `jwt.secret` | `JWT_SECRET` | **none** | yes — the boot fails without it |
 | `cloudinary.cloud-name` | `CLOUDINARY_CLOUD_NAME` | *(empty)* | for uploads |
 | `cloudinary.api-key` | `CLOUDINARY_API_KEY` | *(empty)* | for uploads |
 | `cloudinary.api-secret` | `CLOUDINARY_API_SECRET` | *(empty)* | for uploads |
-| `spring.mail.username` | `MAIL_USER` | *(empty)* | for registration |
-| `spring.mail.password` | `MAIL_PASSWORD` | *(empty)* | for registration |
+| `spring.mail.username` | `MAIL_USER` | *(empty)* | for the account flows |
+| `spring.mail.password` | `MAIL_PASSWORD` | *(empty)* | for the account flows |
 | `google.recaptcha.secret` | `RECAPTCHA_SECRET` | *(empty)* | for register/login/reset |
-| `jwt.secret` | `JWT_SECRET` | **none** | yes — the boot fails without it |
+| `spring.datasource.hikari.maximum-pool-size` | `DB_POOL_SIZE` | `5` | no |
+| `pescabrasil.cors.allowed-origins` | `CORS_ALLOWED_ORIGINS` | the two real origins | no |
+| `pescabrasil.openapi.public` | `OPENAPI_PUBLIC` | `false` | no |
+| `pescabrasil.rate-limit.enabled` | `RATE_LIMIT_ENABLED` | `true` | no |
+| `pescabrasil.rate-limit.requests-per-window` | `RATE_LIMIT_REQUESTS` | `20` | no |
+| `pescabrasil.rate-limit.window-seconds` | `RATE_LIMIT_WINDOW_SECONDS` | `60` | no |
 
 Fixed in `application.properties` and not overridable per environment: the Postgres
-dialect, `ddl-auto=update`, SQL logging, Gmail's SMTP host, port and 5-second timeouts,
-and the 5 MB multipart cap (`spring.servlet.multipart.max-file-size` and
-`max-request-size`).
+dialect, `ddl-auto=update`, `open-in-view=false`, the 5 MB multipart cap,
+`server.forward-headers-strategy=framework`, the Actuator exposure, and Gmail's SMTP
+host, port and 5-second timeouts.
 
 > **`JWT_SECRET` has no default.** `${JWT_SECRET}` with no `:` means Spring cannot
 > resolve the placeholder when the variable is absent, and the context fails to start —
-> deliberately, so a forgotten variable is a failed deploy rather than tokens signed
-> with a string anybody can read in this repository. `JwtUtil` additionally refuses a
-> secret shorter than 32 characters. See [Security](04-security.md#secrets).
+> deliberately, so a forgotten variable is a failed deploy rather than tokens signed with
+> a string anybody can read in this repository. `JwtUtil` additionally refuses a secret
+> shorter than 32 characters, with a message naming the property. See
+> [Security](04-security.md#secrets).
 
-### Granting `ROLE_ADMIN`
+---
 
-Catalogue writes require `ROLE_ADMIN`, and no endpoint hands it out — registration
-always assigns `ROLE_PESCADOR`. Promoting an account is a database operation:
+## Granting `ROLE_ADMIN`
+
+Catalogue writes require `ROLE_ADMIN`, and **no endpoint hands it out** — registration
+always assigns `ROLE_PESCADOR`. That is deliberate: a registration endpoint able to grant
+the role that guards the catalogue would not be guarding it.
+
+Promoting an account is a database operation:
 
 ```sql
 INSERT INTO tb_user_roles (user_id, role_id)
@@ -120,25 +128,33 @@ SELECT u.id, r.id FROM tb_user u, tb_role r
 WHERE u.email = 'you@example.com' AND r.name = 'ROLE_ADMIN';
 ```
 
-`RoleDataLoader` guarantees both rows exist in `tb_role` after any boot, so this can be
-run against a freshly created database without seeding anything first.
+`RoleDataLoader` guarantees both rows exist in `tb_role` after any boot, so this runs
+against a freshly created database without seeding anything first.
+
+> Until an account is promoted, the frontend's management screens answer `403` on their
+> first write — and the Angular interceptor signs the user out on `403`, so it looks like
+> a session problem rather than a permission one. That is [roadmap item
+> 9](06-roadmap.md#9--the-frontends-role-guard), and it lives in the UI repository.
 
 ---
 
 ## Docker
 
-A two-stage build. Maven compiles inside the image, and only the JAR crosses into the
-runtime layer:
+A two-stage build.
 
 ```dockerfile
 FROM maven:3.9.6-eclipse-temurin-21 AS build
 WORKDIR /app
-COPY . .
-RUN mvn clean package -DskipTests
+COPY pom.xml .
+RUN mvn -B dependency:go-offline
+COPY src ./src
+RUN mvn -B clean package -DskipTests
 
-FROM eclipse-temurin:21-jdk-jammy
+FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
-COPY --from=build /app/target/*.jar app.jar
+RUN useradd --system --uid 10001 --create-home appuser
+USER appuser
+COPY --from=build --chown=appuser:appuser /app/target/*.jar app.jar
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
@@ -148,16 +164,36 @@ docker build -t pesca-brasil-api .
 docker run -p 8080:8080 --env-file .env pesca-brasil-api
 ```
 
-Two things about this file are worth knowing rather than assuming:
+Four things about this file are decisions rather than boilerplate:
 
-- **`-DskipTests`.** The image build never runs the suite. Nothing else runs it either
-  — there is no CI pipeline in this repository — so today the tests are run by hand or
-  not at all.
-- **`COPY . .` copies the whole working directory** into the build stage, `target/`
-  included, and there is no `.dockerignore`. It works, and it makes the build slower
-  and the layer cache less useful than it should be.
+- **`pom.xml` is copied before `src`.** Dependencies change far less often than code, so
+  resolving them in their own layer means an ordinary commit reuses the cache instead of
+  re-downloading the world.
+- **`-DskipTests`.** The suite runs in CI, with reports. Repeating it here would only
+  lengthen every image build; before there was a CI pipeline, this flag meant the tests
+  never ran at all.
+- **A JRE base, not a JDK.** The runtime does not compile anything.
+- **A non-root user.** A process that only reads its own jar has no reason to be root
+  inside the container.
 
-Both are on the [roadmap](06-roadmap.md).
+`.dockerignore` keeps `target/`, `.git/`, the docs and — most importantly —
+`application-local.properties` out of the build context.
+
+---
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every push to `main`
+and every pull request, cancelling in-progress runs when a new commit arrives.
+
+| Job | What it does |
+|---|---|
+| **build** | `./mvnw verify` on JDK 21 with Maven caching, uploading the surefire reports as an artifact |
+| **secrets** | Scans the **entire history** (`fetch-depth: 0`) for credential *formats* — `AKIA…`, private-key headers, `sk_live_…`, `ghp_…`, connection strings with a password — and separately asserts that `application-local.properties` never appears in the history |
+| **image** | Builds the Docker image with Buildx and a layer cache. No push: the point is knowing the Dockerfile still works |
+
+The secret scan prints the commit and the file, never the matching line — the run log is
+public.
 
 ---
 
@@ -182,70 +218,70 @@ Browser ──► Vercel (Angular) ──► Render (Spring Boot) ──► Supa
 ```
 
 No secret is in this repository; everything sensitive is set in Render's environment
-panel.
+panel. `/actuator/health` is public and is what a platform health check should point at.
 
-> **Sentry runs in the frontend, not here.** `@sentry/angular` is a dependency of the
-> UI project and reports browser-side errors. This API has no Sentry SDK, no Actuator
-> and no metrics endpoint — a server-side exception appears in Render's log stream and
-> nowhere else. Adding backend error tracking is on the roadmap; it is called out
-> because it is easy to read the frontend's monitoring as the whole system's.
+> **Sentry runs in the frontend, not here.** `@sentry/angular` is a dependency of the UI
+> project and reports browser-side errors. This API logs server-side exceptions through
+> SLF4J, which on Render means the log stream and nowhere else. Aggregating them is
+> [roadmap item 4](06-roadmap.md#4--backend-error-tracking); it is called out because it
+> is easy to read the frontend's monitoring as the whole system's.
 
 ---
 
 ## Constraints that shaped the setup
 
-Three things about running this for free are worth stating, because they only show up
-after deploying.
+Three things about running this for free only show up after deploying.
 
 **Free Render instances sleep.** After a period without traffic the container is spun
 down, and the next request pays a cold start — the JVM boots, Hibernate reconciles the
 schema, the connection pool opens. First-request latency of a minute or more is normal,
-and it is why the deployed API can appear to be down when it is merely asleep. The
-usual fix is a scheduled ping; there is none in this repository today.
+and it is why the deployed API can appear to be down when it is merely asleep. There is
+no scheduled ping in this repository.
 
-**The database is shared between local and deployed.** `application-local.properties`
-points at the same Supabase instance the deployed API uses, so development happens
-against production data. It is convenient and it means a local experiment can write
-rows real users see. A local Postgres in Docker — and a `docker-compose.yml` to bring
-it up — is the fix, and it is on the roadmap.
+**The connection goes through Supabase's pooler on port 6543**, with `prepareThreshold=0`
+in the JDBC URL. That parameter disables the PostgreSQL JDBC driver's server-side
+prepared statements, which the transaction pooler cannot support — a prepared statement
+lives in a session, and the pooler hands out a different session per transaction. Without
+it, queries fail intermittently with *"prepared statement already exists"* under any real
+concurrency. It is one query parameter and it is not optional.
 
-**The connection goes through Supabase's pooler on port 6543**, with
-`prepareThreshold=0` in the JDBC URL. That parameter disables the PostgreSQL JDBC
-driver's server-side prepared statements, which the transaction pooler cannot support —
-a prepared statement lives in a session, and the pooler hands out a different session
-per transaction. Without it, queries fail intermittently with *"prepared statement
-already exists"* under any real concurrency. It is one query parameter and it is not
-optional.
+**The connection ceiling is low.** The free pooler accepts few connections, so
+`DB_POOL_SIZE` defaults to 5; a larger pool means the second instance to start cannot
+open its own and dies during schema reconciliation.
 
 ---
 
 ## Testing
 
-**One test.** `BrazilApplicationTests.contextLoads` starts the Spring context and
-asserts that it starts.
+**43 tests**, and none of them needs a database, a network or a Docker socket.
 
-That is worth being exact about rather than dressing up. What the test does catch is a
-real class of failure — a missing bean, a circular dependency, a `@Value` with no
-property behind it, an entity that Hibernate cannot map — and those are precisely the
-errors that only appear at boot. What it does not catch is any behaviour: not a
-validation rule, not the ownership logic on catch records, not the token filter, not
-the spot-creation branch.
+That last part is the design constraint rather than a coincidence.
+`src/test/resources/application.properties` sits on the test classpath and replaces the
+main one, so the suite does not activate the `local` profile, does not look for real
+credentials, and points at in-memory H2. Before that file existed, the single test in the
+project could only run on the machine that had the deployed database's credentials —
+which is why the Docker build passed `-DskipTests` and why CI was impossible.
 
-It also needs a reachable database and the configured properties, because a
-`@SpringBootTest` with no slicing starts everything. So the one test that exists cannot
-run in an environment that has not been configured — which is why the Docker build
-skips it.
+| Suite | Covers |
+|---|---|
+| `JwtUtilTest` | The token contract: a token signed with another key is refused, a tampered token is refused, a token does not work for another user, and a short secret refuses the boot |
+| `UserServiceTest` | Registration, verification and reset: the password policy, the duplicate e-mail conflict, the account born disabled, expiry checked before correctness, the code destroyed on use, the five-attempt ceiling, and that unknown e-mail, wrong code and expired code are indistinguishable |
+| `CatchRecordServiceTest` | Both branches of the spot resolution, the deduplication, the owner taken from the token, and that another person's record answers exactly like a missing one |
+| `FishControllerSecurityTest` | The real filter chain: public reads, `401` anonymous, `403` for a fisher, `201` for an admin, the field-keyed validation body, and `400` for an unknown sort property |
+| `PageableFactoryTest` | The sort allowlist, the direction parameter, and the ceilings |
+| `BrazilApplicationTests` | The context still starts — a missing bean, a circular dependency, a `@Value` with no property behind it, an entity Hibernate cannot map |
 
-The intended shape, in order:
+Principles the suite holds to:
 
-1. `@WebMvcTest` per controller with the service mocked — status codes, validation
-   messages, and that `POST /api/catch-records` refuses an anonymous caller.
-2. Plain JUnit over the services with mocked repositories — the two branches of
-   `CatchRecordService.save`, and every `orElseThrow`.
-3. `@DataJpaTest` against Testcontainers for the derived queries and the ranking
-   projection, which are the parts a mock cannot verify.
-4. A test that pins the JWT contract: a token signed with a different key is rejected,
-   an expired token answers `401` with the expired-token message specifically.
-
-Item 4 is the one worth writing first. It is the only place where a silent regression
-would be an authentication bypass rather than a broken screen.
+- **Every test that exists prevents a specific regression**, and most of them prevent one
+  that was real. The five-attempt ceiling, the indistinguishable reset failures and the
+  not-yours-is-not-found assertion are each a written-down version of a gap this project
+  had.
+- **The security tests exercise the real filter chain**, not a mock of it. An early
+  version of `FishControllerSecurityTest` mocked `JwtAuthenticationFilter` itself; a
+  Mockito mock of a `Filter` never calls `doFilter`, so every request died mid-chain and
+  returned `200` with an empty body — and every assertion about authorization passed for
+  the wrong reason.
+- **No test needs the network.** What is still missing is the other side of that: the
+  Cloudinary and reCAPTCHA integrations have no stubbed-HTTP coverage at all. That is
+  [roadmap item 6](06-roadmap.md#6--widen-the-test-suite).

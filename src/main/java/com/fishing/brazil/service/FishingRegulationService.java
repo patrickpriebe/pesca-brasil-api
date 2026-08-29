@@ -2,6 +2,7 @@ package com.fishing.brazil.service;
 
 import com.fishing.brazil.dto.request.FishingRegulationRequestDTO;
 import com.fishing.brazil.dto.response.FishingRegulationResponseDTO;
+import com.fishing.brazil.exception.NotFoundException;
 import com.fishing.brazil.entity.FishingRegulation;
 import com.fishing.brazil.repository.FishingRegulationRepository;
 import org.springframework.data.domain.Page;
@@ -41,6 +42,9 @@ public class FishingRegulationService {
 
     @Transactional
     public void delete(Long id) {
+        if (!repository.existsById(id)) {
+            throw new NotFoundException("Defeso não encontrado.");
+        }
         repository.deleteById(id);
     }
 

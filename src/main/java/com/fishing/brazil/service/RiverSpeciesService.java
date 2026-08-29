@@ -5,6 +5,8 @@ import com.fishing.brazil.dto.response.RiverSpeciesResponseDTO;
 import com.fishing.brazil.entity.Fish;
 import com.fishing.brazil.entity.River;
 import com.fishing.brazil.entity.RiverSpecies;
+import com.fishing.brazil.exception.ConflictException;
+import com.fishing.brazil.exception.NotFoundException;
 import com.fishing.brazil.repository.FishRepository;
 import com.fishing.brazil.repository.RiverRepository;
 import com.fishing.brazil.repository.RiverSpeciesRepository;
@@ -38,9 +40,13 @@ public class RiverSpeciesService {
     @Transactional
     public RiverSpeciesResponseDTO save(RiverSpeciesRequestDTO dto) {
         River river = riverRepository.findById(dto.getRiverId())
-                .orElseThrow(() -> new RuntimeException("Rio não encontrado"));
+                .orElseThrow(() -> new NotFoundException("Rio não encontrado."));
         Fish fish = fishRepository.findById(dto.getFishId())
-                .orElseThrow(() -> new RuntimeException("Peixe não encontrado"));
+                .orElseThrow(() -> new NotFoundException("Peixe não encontrado."));
+
+        if (riverSpeciesRepository.existsByRiverIdAndFishId(river.getId(), fish.getId())) {
+            throw new ConflictException("Esta espécie já está associada a este rio.");
+        }
 
         RiverSpecies rs = new RiverSpecies();
         rs.setRiver(river);
@@ -53,6 +59,9 @@ public class RiverSpeciesService {
 
     @Transactional
     public void delete(Long id) {
+        if (!riverSpeciesRepository.existsById(id)) {
+            throw new NotFoundException("Associação entre rio e espécie não encontrada.");
+        }
         riverSpeciesRepository.deleteById(id);
     }
 
@@ -61,11 +70,11 @@ public class RiverSpeciesService {
         dto.setId(rs.getId());
         dto.setAbundance(rs.getAbundance());
         dto.setBestSeason(rs.getBestSeason());
-        if(rs.getRiver() != null) {
+        if (rs.getRiver() != null) {
             dto.setRiverId(rs.getRiver().getId());
             dto.setRiverName(rs.getRiver().getName());
         }
-        if(rs.getFish() != null) {
+        if (rs.getFish() != null) {
             dto.setFishId(rs.getFish().getId());
             dto.setFishCommonName(rs.getFish().getCommonName());
         }

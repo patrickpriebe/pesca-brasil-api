@@ -2,6 +2,7 @@ package com.fishing.brazil.service;
 
 import com.fishing.brazil.dto.request.EquipmentRequestDTO;
 import com.fishing.brazil.dto.response.EquipmentResponseDTO;
+import com.fishing.brazil.exception.NotFoundException;
 import com.fishing.brazil.entity.Equipment;
 import com.fishing.brazil.repository.EquipmentRepository;
 import org.springframework.data.domain.Page;
@@ -40,6 +41,9 @@ public class EquipmentService {
 
     @Transactional
     public void delete(Long id) {
+        if (!equipmentRepository.existsById(id)) {
+            throw new NotFoundException("Equipamento não encontrado.");
+        }
         equipmentRepository.deleteById(id);
     }
 

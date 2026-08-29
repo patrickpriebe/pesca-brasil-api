@@ -49,7 +49,7 @@ support that premise honestly — including the parts where it costs something.
 | Compete | Three public leaderboards: longest fish, heaviest fish, most active fisher |
 | Check the law | *Piracema* — the annual spawning ban — by hydrographic basin |
 
-Ten controllers, thirty-eight endpoints, thirteen tables, one PostgreSQL database, one
+Ten controllers, forty-one endpoints, thirteen tables, one PostgreSQL database, one
 deployable JAR.
 
 ---
@@ -124,18 +124,20 @@ Full reasoning: [docs/01-architecture.md](docs/01-architecture.md).
 | Layer | Choice | Notes |
 |---|---|---|
 | Language | **Java 21** | |
-| Framework | **Spring Boot 3.3.6** | Web, Data JPA, Security, Validation, Mail |
+| Framework | **Spring Boot 3.3.6** | Web, Data JPA, Security, Validation, Mail, Actuator |
 | Database | **PostgreSQL** | Supabase, reached through the session pooler |
 | Persistence | **Spring Data JPA / Hibernate** | Schema owned by `ddl-auto=update` — see [Known limits](#known-limits) |
-| Auth | **Spring Security** + **JJWT 0.11.5** | Stateless, HS256, homegrown registration |
+| Auth | **Spring Security** + **JJWT 0.11.5** | Stateless, HS256, method security, homegrown registration |
 | Passwords | **BCrypt** | Spring Security's encoder, default strength |
-| Validation | **Bean Validation** | Declarative, with a `@RestControllerAdvice` |
-| Media | **Cloudinary** (`cloudinary-http44` 1.36.0) | Catch photos |
-| E-mail | **Spring Mail** over Gmail SMTP | Six-digit verification codes |
+| Validation | **Bean Validation** | Declarative, including cross-field `@AssertTrue` |
+| Media | **Cloudinary** (`cloudinary-http44` 1.36.0) | Catch photos, 5 MB, images only |
+| E-mail | **Spring Mail** over Gmail SMTP | Six-digit verification codes, `@Async` |
 | Bot defence | **Google reCAPTCHA** | Register, login and password reset |
-| Docs | **springdoc-openapi 2.6.0** | On the classpath — see [Known limits](#known-limits) |
+| Docs | **springdoc-openapi 2.6.0** | Swagger UI with a bearer scheme, gated by a property |
+| Tests | **JUnit 5, Mockito, AssertJ, Spring Security Test, H2** | 43 tests, no database or network needed |
+| CI | **GitHub Actions** | `verify`, a credential scan over the whole history, a Docker build |
 | Boilerplate | **Lombok** | Getters, setters, id-only equality |
-| Container | **Docker**, two-stage | Maven build stage, Temurin 21 runtime |
+| Container | **Docker**, two-stage | Cached dependency layer, JRE base, non-root user |
 | Frontend | **Angular 22** + Tailwind 4 + Leaflet | Separate repository |
 
 ---
@@ -181,15 +183,17 @@ decided by whether that field is null, and the two are mutually exclusive.
 
 **What the decision costs**, stated plainly rather than left for someone to discover:
 
-- Two catches from the same rock create two spots. The table grows once per catch, not
-  once per place. Radius-based deduplication is the fix, and it is
-  [on the roadmap](docs/06-roadmap.md#12--deduplicate-fishing-spots).
-- A spot born from a pin carries `accessType = "Não especificado"` and a generated name
-  — `"Ponto no <river>"` when the fisher did not supply one — and is otherwise
+- **The obvious cost was that the table grew once per catch instead of once per place.**
+  Two fish landed from the same rock produced two spots. A coordinate on the same river
+  within roughly 55 m of an existing spot now reuses it — a bounding box, not a true
+  radius, because computing real distance in the database to separate two points a few
+  dozen metres apart changes no decision at that scale.
+- A spot born from a pin still carries `accessType = "Não especificado"` and a generated
+  name — `"Ponto no <river>"` when the fisher did not supply one — and is otherwise
   indistinguishable from a curated one.
-- Bean validation marks `riverId`, `latitude` and `longitude` as required, so the
-  curated branch must still send fields it will ignore. That needs cross-field
-  validation.
+- The two branches are mutually exclusive, and cross-field validation says so: send
+  `fishingSpotId`, **or** send `riverId` with a coordinate. Neither branch has to carry
+  the other's fields.
 
 The decision is still right. Asking a fisher to file the location before recording the
 fish is asking them not to record the fish.
@@ -259,18 +263,19 @@ public; **🔒** needs a bearer token, **🛡** needs `ROLE_ADMIN` as well.
 | Resource | Endpoints |
 |---|---|
 | **Auth** | `POST /auth/register` · `/auth/verify` · `/auth/login` · `/auth/forgot-password` · `/auth/reset-password` |
-| **Catch records** | `GET /catch-records` · `POST` 🔒 · `DELETE /{id}` 🔒 owner |
+| **Catch records** | `GET /catch-records` `?search=` · `GET /me` 🔒 · `POST` 🔒 · `DELETE /{id}` 🔒 owner |
 | **Rankings** | `GET /catch-records/ranking/comprimento` · `/peso` · `/pescadores` |
 | **Fish** | `GET /fishes` `?name=` · `GET /{id}` · `POST` 🛡 · `DELETE /{id}` 🛡 |
-| **Baits** | `GET /baits` `?name=` · `POST` 🛡 · `DELETE /{id}` 🛡 |
-| **Equipment** | `GET /equipments` · `POST` 🛡 · `DELETE /{id}` 🛡 |
+| **Baits** | `GET /baits` `?name=` · `GET /{id}` · `POST` 🛡 · `DELETE /{id}` 🛡 |
+| **Equipment** | `GET /equipments` · `GET /{id}` · `POST` 🛡 · `DELETE /{id}` 🛡 |
 | **Rivers** | `GET /rivers` `?name=` · `GET /{id}` · `POST` 🛡 · `DELETE /{id}` 🛡 |
 | **River species** | `GET /river-species` · `GET /river/{riverId}` · `POST` 🛡 · `DELETE /{id}` 🛡 |
 | **Fishing spots** | `GET /fishing-spots` · `GET /river/{riverId}` · `GET /{id}` · `POST` 🛡 · `DELETE /{id}` 🛡 |
 | **Regulations** | `GET /fishing-regulations` `?basin=` · `POST` 🛡 · `DELETE /{id}` 🛡 |
 | **Images** | `POST /images/upload` 🔒 — `multipart/form-data`, field `file`, images only, 5 MB |
 
-Errors carry a consistent envelope, built by `GlobalExceptionHandler`:
+Errors carry a consistent envelope, and validation failures add a field-keyed map so the
+client can put each message next to its input:
 
 ```json
 {
@@ -278,9 +283,15 @@ Errors carry a consistent envelope, built by `GlobalExceptionHandler`:
   "status": 400,
   "error": "Erro de Validação",
   "message": "O peixe é obrigatório.",
-  "path": "/api/catch-records"
+  "path": "/api/catch-records",
+  "fieldErrors": { "fishId": "O peixe é obrigatório." }
 }
 ```
+
+Each domain exception carries its own status — `404` not found, `400` rule violated,
+`409` conflict, `429` rate limited, `403` forbidden — and anything unrecognised is a
+logged `500`. The earlier version mapped *every* `RuntimeException` to `404`, so a
+genuine server fault was reported as *not found*.
 
 Error messages are in Portuguese, because they are written to be shown to a Brazilian
 end user and the frontend displays them directly. Identifiers, table names, code and
@@ -417,31 +428,24 @@ between the two: it needs a token *and* ownership, with `ROLE_ADMIN` as the exce
 
 ## Running locally
 
-JDK 21 and a PostgreSQL database. There is no `docker-compose.yml` yet — see
-[Known limits](#known-limits).
+JDK 21, and Docker for the database.
 
 ```bash
 git clone https://github.com/patrickpriebe/pesca-brasil-api.git
 cd pesca-brasil-api
+docker compose up -d
 ```
 
-Create `src/main/resources/application-local.properties` — the path is git-ignored:
+PostgreSQL comes up on **5433** — 5432 is usually taken by a native install. Then copy
+the example configuration:
 
-```properties
-spring.datasource.url=jdbc:postgresql://localhost:5432/pescabrasil
-spring.datasource.username=postgres
-spring.datasource.password=postgres
-
-cloudinary.cloud-name=your-cloud
-cloudinary.api-key=your-key
-cloudinary.api-secret=your-secret
-
-spring.mail.username=you@gmail.com
-spring.mail.password=your-app-password
-
-google.recaptcha.secret=your-recaptcha-secret
-jwt.secret=a-secret-of-at-least-32-characters-for-HS256
+```bash
+cp src/main/resources/application-local.properties.example \
+   src/main/resources/application-local.properties
 ```
+
+The real file is git-ignored; the example is not, so the *shape* of the configuration
+lives in the repository and the values never do.
 
 ```bash
 ./mvnw spring-boot:run
@@ -454,6 +458,9 @@ the two roles idempotently.
 ```bash
 curl "http://localhost:8080/api/fishes?size=5"
 ```
+
+Swagger is at **http://localhost:8080/swagger-ui/index.html** — the example sets
+`pescabrasil.openapi.public=true`, and it defaults to `false` everywhere else.
 
 | To exercise | You need |
 |---|---|
@@ -474,8 +481,10 @@ docker build -t pesca-brasil-api .
 docker run -p 8080:8080 --env-file .env pesca-brasil-api
 ```
 
-Two-stage: Maven compiles in the build stage, only the JAR crosses into the Temurin 21
-runtime.
+Two-stage: Maven compiles in the build stage and only the JAR crosses into a Temurin 21
+**JRE**, where it runs as a non-root user. `pom.xml` is copied before `src` so
+dependency resolution gets its own cached layer, and `.dockerignore` keeps `target/`,
+the docs and `application-local.properties` out of the build context.
 
 Full environment-variable table and the constraints behind the deployment:
 [docs/05-deployment.md](docs/05-deployment.md).
@@ -506,29 +515,46 @@ hands out a different backend session per transaction, and a server-side prepare
 statement lives in a session. Without that parameter, queries fail intermittently with
 *"prepared statement already exists"* under any real concurrency.
 
-**Sentry is in the frontend, not here.** This API has no Sentry SDK, no Actuator and no
-metrics endpoint; a server-side exception appears in Render's log stream and nowhere
-else. It is called out because it is easy to read the frontend's monitoring as the
-whole system's.
+**Sentry is in the frontend, not here.** This API exposes `/actuator/health` — public,
+with no details, which is what a platform health check needs and nothing more — but it
+has no Sentry SDK and no metrics. A server-side exception reaches SLF4J, and on Render
+SLF4J reaches the log stream and nowhere else. It is called out because it is easy to
+read the frontend's monitoring as the whole system's.
 
 ---
 
 ## Testing
 
-**One test.** `BrazilApplicationTests.contextLoads` starts the Spring context and
-asserts that it starts.
+**43 tests**, and none of them needs a database, a network or a Docker socket.
 
-Worth being exact about rather than dressing up. It does catch a real class of failure
-— a missing bean, a circular dependency, a `@Value` with no property behind it, an
-entity Hibernate cannot map — and those are precisely the errors that only appear at
-boot. It catches no behaviour at all: not a validation rule, not the ownership logic,
-not the token filter, not the spot-creation branch. It also needs a reachable database,
-which is why the Docker build skips it and why there is no CI pipeline yet.
+```bash
+./mvnw verify
+```
 
-The intended shape, in the order it should be written, is in
-[docs/05-deployment.md](docs/05-deployment.md#testing). The most valuable first test is
-the JWT contract, because that is the only place where a silent regression is an
-authentication bypass rather than a broken screen.
+That constraint is the design, not luck. `src/test/resources/application.properties`
+replaces the main one on the test classpath, so the suite never activates the `local`
+profile, never looks for real credentials, and runs against in-memory H2. Before that
+file existed, the project's single test could only run on the machine holding the
+deployed database's credentials — which is why the Docker build passed `-DskipTests` and
+why there was no CI.
+
+| Suite | Covers |
+|---|---|
+| `JwtUtilTest` | The token contract: another key is refused, a tampered token is refused, a token does not work for another user, a short secret refuses the boot |
+| `UserServiceTest` | The account flows: the password policy, the duplicate-e-mail conflict, the account born disabled, expiry checked before correctness, the code destroyed on use, the five-attempt ceiling, and that unknown e-mail, wrong code and expired code are indistinguishable |
+| `CatchRecordServiceTest` | Both branches of the spot resolution, the deduplication, the owner taken from the token, and that another person's record answers exactly like a missing one |
+| `FishControllerSecurityTest` | The real filter chain: public reads, `401` anonymous, `403` for a fisher, `201` for an admin, the field-keyed validation body |
+| `PageableFactoryTest` | The sort allowlist, the direction parameter, the ceilings |
+| `BrazilApplicationTests` | The context still starts |
+
+The security tests exercise the **real** filter chain. An early version mocked
+`JwtAuthenticationFilter` itself — and a Mockito mock of a `Filter` never calls
+`doFilter`, so every request died mid-chain, returned `200` with an empty body, and every
+authorization assertion passed for the wrong reason. Mock the filter's dependencies, not
+the filter.
+
+What is still uncovered is in
+[docs/05-deployment.md](docs/05-deployment.md#testing).
 
 ---
 
@@ -552,9 +578,24 @@ tells an attacker holding an old code that the code was at least valid.
 
 **E-mail is `@Async` so SMTP is not inside a transaction.** Sending synchronously inside
 `registerUser` would put a five-second timeout inside a transaction that has already
-inserted the user. The trade is that a send failure is invisible to the caller, which
-is why *forgot password* doubles as the recovery path. *(The annotation is present;
-`@EnableAsync` is not yet — see [Known limits](#known-limits).)*
+inserted the user. The trade is that a send failure is invisible to the caller, which is
+why *forgot password* doubles as the recovery path.
+
+**Not-yours and not-found answer the same.** Deleting somebody else's catch record
+returns the identical `404` as deleting one that never existed. A distinct `403` would
+confirm the record's existence to whoever is walking the id space, and the mere fact
+that a record exists is already someone else's information.
+
+**A `Filter` must never be mocked in a security test.** A Mockito mock of a `Filter`
+does not call `doFilter`, so the request dies mid-chain and returns `200` with an empty
+body — and every authorization assertion passes for the wrong reason. Mock the filter's
+dependencies instead. That is not a hypothetical: it happened while writing
+`FishControllerSecurityTest`, and six green assertions were proving nothing.
+
+**The rate limiter depends on `forward-headers-strategy`, and says so.** Behind a proxy,
+`getRemoteAddr()` returns the proxy for everybody; a limiter reading that would throttle
+the whole user base as one client — worse than the gap it closes. The property is set,
+and the dependency is written down where the filter lives.
 
 **Mapping is hand-written, not reflective.** A private `convertToResponseDTO` per
 service. For eight small aggregates, MapStruct or ModelMapper costs a dependency, a
@@ -581,41 +622,42 @@ upload does not lose the rest of the form.
 ## Known limits
 
 Recorded so they do not read as oversights. Everything here has an entry in
-[docs/06-roadmap.md](docs/06-roadmap.md).
+[docs/06-roadmap.md](docs/06-roadmap.md), which also keeps the list of what has already
+been closed.
 
-- **Nothing is rate limited.** Login, registration and password reset can each be
-  automated against as fast as the network allows, and the free tiers behind them —
-  SMTP quota, Cloudinary storage, database connections — are what break first. The
-  right layer is the edge rather than a counter inside a service, and an in-process
-  limiter behind Render's proxy would need `X-Forwarded-For` handled correctly or it
-  would rate-limit every user as if they were one. That decision is still open.
-- **There is no password policy.** Nothing checks length or composition, so a
-  one-character password is accepted.
+- **The schema is owned by `ddl-auto=update`.** It never drops, never alters, leaves no
+  record of what ran, and gives the application permission to reshape production at
+  boot. Flyway plus `validate` is the fix, and it needs the *live* schema dumped as a
+  baseline rather than one guessed from the entities. It blocks three other items:
+  renaming `catch_record` to match its twelve `tb_*` siblings, moving `catch_date` to a
+  zoned type, and putting `UNIQUE(river_id, fish_id)` in the database rather than only
+  in the service.
+- **Rate limiting is in-process.** A fixed window per source address guards
+  `/api/auth/**`, and it works because `server.forward-headers-strategy=framework` makes
+  the app see the real caller behind Render's proxy. But the state is in memory: it
+  resets on restart and is not shared, so from two instances the effective limit
+  doubles. The destination is the edge; this is the fallback.
 - **Tokens cannot be revoked.** There is no denylist and no `jti`; a leaked token is
   valid until it expires. Twenty-four hours is the blast radius, and the per-request
   database read is what keeps a *disabled* account from surviving that window.
-- **The schema is owned by `ddl-auto=update`.** It never drops, never alters, leaves no
-  record of what ran, and gives the application permission to reshape production at
-  boot. Flyway plus `validate` is the fix, and it blocks two other items: renaming
-  `catch_record` to match its twelve `tb_*` siblings, and moving `catch_date` from
-  `LocalDateTime` to a zoned type.
-- **Every `RuntimeException` becomes a `404`.** `GlobalExceptionHandler` maps the common
-  case — a referenced id that does not exist — and therefore also reports a genuine
-  server fault as *not found*. The auth endpoints are unaffected; they catch and return
-  `400` themselves.
-- **Swagger is on the classpath and unreachable.** `springdoc-openapi` publishes
-  `/v3/api-docs` and `/swagger-ui/**`, and neither is permitted by the filter chain, so
-  the explorer cannot load its own document without a token it has no way to obtain.
-- **`@EnableAsync` is missing**, so `EmailService`'s `@Async` methods currently run on
-  the request thread.
-- **Local development shares the deployed database.** A `docker-compose.yml` with a
-  local PostgreSQL is the fix.
-- **There is no CI pipeline**, and the Docker build runs with `-DskipTests`.
 - **Closed seasons are stored and not enforced.** A catch record dated inside a
-  *piracema* period is accepted silently — and deciding what should happen instead is a
-  product question before it is a code one.
-- **`diasNaAgua` counts distinct timestamps, not distinct days.** Two catches an hour
-  apart on one trip count as two.
+  *piracema* period is accepted silently. What should happen instead is a product
+  question first: refusing punishes honest reporting and will produce false dates.
+- **Every catch record is public.** That is the premise, and it is right for the
+  leaderboards — but it means a fisher cannot keep a spot to themselves without leaving
+  the app.
+- **No backend error aggregation.** Exceptions reach SLF4J, and on Render SLF4J reaches
+  the log stream and nothing else. Sentry runs in the frontend, not here.
+- **No security headers.** No CSP, HSTS or `X-Content-Type-Options` on API responses.
+- **`ROLE_ADMIN` is granted by a SQL statement.** Correct — a registration endpoint able
+  to hand out the role guarding the catalogue would not be guarding it — but there is
+  also no path for an existing administrator to promote somebody.
+- **The fish catalogue has an N+1.** Each fish loads its two recommendation collections
+  separately, so a page of ten costs twenty extra queries.
+- **The frontend does not check roles.** Its guard only checks that a session exists, so
+  a `ROLE_PESCADOR` account reaches the management screens and gets `403` on the first
+  write — and the interceptor signs the user out on `403`, so it reads as a session
+  problem. That fix lives in the UI repository.
 
 ---
 
@@ -625,7 +667,7 @@ Recorded so they do not read as oversights. Everything here has an entry in
 |---|---|
 | [Architecture](docs/01-architecture.md) | Layers, request lifecycle, transaction boundaries, and what this architecture deliberately is not |
 | [Data model](docs/02-data-model.md) | Every table, the nullability decisions, and what `ddl-auto=update` costs |
-| [API reference](docs/03-api-reference.md) | All thirty-eight endpoints, with payloads and status codes |
+| [API reference](docs/03-api-reference.md) | All forty-one endpoints, with payloads and status codes |
 | [Security](docs/04-security.md) | The registration handshake, the token, the authorization model, and the known gaps |
 | [Running and deploying](docs/05-deployment.md) | Local setup, configuration, Docker, the deployed environment, testing |
 | [Roadmap](docs/06-roadmap.md) | What is missing, in order — and what is deliberately out of scope |

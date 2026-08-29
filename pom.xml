@@ -11,24 +11,40 @@
 	<groupId>com.fishing</groupId>
 	<artifactId>brazil</artifactId>
 	<version>0.0.1</version>
-	<name/>
-	<description/>
-	<url/>
+	<name>pesca-brasil-api</name>
+	<description>REST API for Pesca Brasil: a logbook for Brazilian sport fishing</description>
+	<url>https://github.com/patrickpriebe/pesca-brasil-api</url>
+
 	<licenses>
-		<license/>
+		<license>
+			<name>MIT License</name>
+			<url>https://opensource.org/licenses/MIT</url>
+			<distribution>repo</distribution>
+		</license>
 	</licenses>
+
 	<developers>
-		<developer/>
+		<developer>
+			<id>patrickpriebe</id>
+			<name>Patrick Priebe</name>
+			<url>https://github.com/patrickpriebe</url>
+		</developer>
 	</developers>
+
 	<scm>
-		<connection/>
-		<developerConnection/>
-		<tag/>
-		<url/>
+		<connection>scm:git:https://github.com/patrickpriebe/pesca-brasil-api.git</connection>
+		<developerConnection>scm:git:git@github.com:patrickpriebe/pesca-brasil-api.git</developerConnection>
+		<url>https://github.com/patrickpriebe/pesca-brasil-api</url>
+		<tag>HEAD</tag>
 	</scm>
+
 	<properties>
 		<java.version>21</java.version>
+		<springdoc.version>2.6.0</springdoc.version>
+		<jjwt.version>0.11.5</jjwt.version>
+		<cloudinary.version>1.36.0</cloudinary.version>
 	</properties>
+
 	<dependencies>
 
 		<dependency>
@@ -39,6 +55,12 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-test</artifactId>
 			<scope>test</scope>
 		</dependency>
 
@@ -59,15 +81,29 @@
             <scope>runtime</scope>
         </dependency>
 
+		<!-- Banco em memoria apenas para os testes de repositorio, para que a suite
+		     rode sem um PostgreSQL disponivel nem um socket Docker funcionando. -->
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+			<scope>test</scope>
+		</dependency>
+
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-web</artifactId>
 		</dependency>
 
+		<!-- Sonda de saude para a plataforma. Somente /actuator/health e exposto. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+
 		<dependency>
 			<groupId>org.springdoc</groupId>
 			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-			<version>2.6.0</version>
+			<version>${springdoc.version}</version>
 		</dependency>
 
 		<dependency>
@@ -78,7 +114,7 @@
 		<dependency>
 			<groupId>com.cloudinary</groupId>
 			<artifactId>cloudinary-http44</artifactId>
-			<version>1.36.0</version>
+			<version>${cloudinary.version}</version>
 		</dependency>
 
 		<dependency>
@@ -94,18 +130,18 @@
 		<dependency>
 			<groupId>io.jsonwebtoken</groupId>
 			<artifactId>jjwt-api</artifactId>
-			<version>0.11.5</version>
+			<version>${jjwt.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>io.jsonwebtoken</groupId>
 			<artifactId>jjwt-impl</artifactId>
-			<version>0.11.5</version>
+			<version>${jjwt.version}</version>
 			<scope>runtime</scope>
 		</dependency>
 		<dependency>
 			<groupId>io.jsonwebtoken</groupId>
 			<artifactId>jjwt-jackson</artifactId>
-			<version>0.11.5</version>
+			<version>${jjwt.version}</version>
 			<scope>runtime</scope>
 		</dependency>
 
@@ -116,6 +152,14 @@
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<excludes>
+						<exclude>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+						</exclude>
+					</excludes>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>

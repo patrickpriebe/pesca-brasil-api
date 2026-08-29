@@ -45,6 +45,7 @@ erDiagram
         boolean enabled
         varchar verification_code
         timestamp verification_code_expires_at
+        int verification_attempts "nullable"
     }
 
     catch_record {
@@ -91,11 +92,22 @@ six-digit code in `verification_code` is what closes the gap. Both the code and 
 expiry are nulled the moment they are consumed, so a used code cannot be replayed and
 a verified row carries no live secret.
 
-The same two columns are reused for the password-reset flow. That is a deliberate
-economy — the two flows are the same mechanism, *prove you read this e-mail* — and it
-has one consequence worth knowing: requesting a password reset on an unverified
-account overwrites the activation code with the reset code. The user gets a working
-path either way, because the reset code is what the reset endpoint asks for.
+The same columns are reused for the password-reset flow. That is a deliberate economy —
+the two flows are the same mechanism, *prove you read this e-mail* — and it has one
+consequence worth knowing: requesting a password reset on an unverified account
+overwrites the activation code with the reset code. The user gets a working path either
+way, because the reset code is what the reset endpoint asks for.
+
+`verification_attempts` counts the wrong guesses against the current code and is reset
+whenever a code is issued or successfully used. The fifth wrong guess destroys the code
+rather than merely rejecting the attempt: a six-digit code has a million values and
+fifteen minutes of life, which is walkable if nothing counts.
+
+**The column is nullable and the Java field is `Integer`, not `int`.** With
+`ddl-auto=update` owning the schema, `ALTER TABLE ... ADD COLUMN ... NOT NULL` against a
+table that already has rows fails on PostgreSQL — Hibernate logs the failure and carries
+on booting, leaving the application reading a column that does not exist. A nullable
+column is added successfully, and `null` is read as "no attempts recorded".
 
 The roles table is filled by `RoleDataLoader`, a `CommandLineRunner` that checks
 before inserting. It runs on every boot and is idempotent by construction, which is
@@ -121,14 +133,17 @@ baits. Modelling either side as a single column would force a choice the domain 
 not make.
 
 Both are owned by `Fish` and populated by id — `FishRequestDTO` carries
-`recommendedBaitIds` and `recommendedEquipmentIds`, and `FishService` resolves them
-with `findAllById` before saving. Ids that do not exist are silently dropped by
-`findAllById` rather than rejected, which is a rough edge recorded in
-[Roadmap](06-roadmap.md).
+`recommendedBaitIds` and `recommendedEquipmentIds`, and `FishService` resolves them with
+`findAllById` before saving. Because `findAllById` returns only what it finds, the
+service compares the resolved count against the requested one and refuses a missing id
+with `404`; without that check an unknown id vanished silently and the caller got `201`
+with fewer recommendations than it asked for.
 
-**The recommendations are not currently returned.** `FishResponseDTO` has no bait or
-equipment field, so the relationship is writable through the API and readable only from
-the database. That is a gap, not a design.
+`FishResponseDTO` returns both lists in full, so the relationship is readable as well as
+writable. The cost is an N+1: each fish loads its two collections separately, and a page
+of ten costs twenty extra queries. An `@EntityGraph` would fix the single-fish case, and
+would force pagination in memory for the list — which is why the list is not fixed that
+way. See [Roadmap item 7](06-roadmap.md#7--n1-on-the-fish-catalogue).
 
 ---
 
@@ -154,10 +169,21 @@ The interesting table is `tb_fishing_spot`, because rows land in it two differen
   `spotName`, or falls back to `"Ponto no " + river.getName()`, and its `access_type`
   is set to the literal `"Não especificado"`.
 
-Nothing distinguishes the two afterwards. A spot born from a map pin is
-indistinguishable from a curated one except by its placeholder access type — which is
-the honest cost of the decision described in the README, and the reason a
-deduplication pass appears on the roadmap.
+**The second path deduplicates before it inserts.** A coordinate on the same river
+within roughly 55 m of an existing spot reuses that spot instead of creating another —
+otherwise the table grew once per *catch* rather than once per *place*, and two fish
+landed from the same rock produced two rows.
+
+The match is a bounding box on latitude and longitude, not a radius. Computing true
+distance in the database would need trigonometry to separate two points a few dozen
+metres apart, and at that scale the difference between the box and the circle changes no
+decision. `0.0005` degrees of latitude is about 55 m; in longitude the same value covers
+less ground the further from the equator, by at most about 15% across Brazil, which does
+not change which spot is picked.
+
+Nothing else distinguishes the two paths afterwards. A spot born from a map pin is
+indistinguishable from a curated one except by its placeholder access type — the honest
+remaining cost of the decision described in the README.
 
 ---
 

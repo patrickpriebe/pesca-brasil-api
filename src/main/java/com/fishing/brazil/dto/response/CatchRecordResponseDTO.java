@@ -1,6 +1,7 @@
 package com.fishing.brazil.dto.response;
 
 import com.fishing.brazil.enums.CatchOutcome;
+import com.fishing.brazil.enums.EquipmentType;
 import com.fishing.brazil.enums.MoonPhase;
 import com.fishing.brazil.enums.WeatherCondition;
 import lombok.Getter;
@@ -24,6 +25,7 @@ public class CatchRecordResponseDTO {
     private String baitName;
 
     private Long equipmentId;
+    private EquipmentType equipmentType;
 
     private Double weightInKg;
     private Double lengthInCm;

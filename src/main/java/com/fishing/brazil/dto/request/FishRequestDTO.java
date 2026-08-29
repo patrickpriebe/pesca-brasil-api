@@ -3,6 +3,7 @@ package com.fishing.brazil.dto.request;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
 import lombok.Setter;
+
 import java.util.List;
 
 @Getter

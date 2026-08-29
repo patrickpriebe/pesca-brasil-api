@@ -1,0 +1,16 @@
+# O build multi-stage compila dentro da imagem: o target/ da maquina local so
+# aumenta o contexto enviado ao daemon e invalida o cache de camada a cada build.
+target/
+.git/
+.github/
+.idea/
+.vscode/
+*.iml
+docs/
+README.md
+docker-compose.yml
+HELP.md
+
+# Nunca dentro da imagem: e o arquivo que guarda as credenciais reais de
+# desenvolvimento. Em producao a configuracao vem do ambiente.
+**/application-local.properties

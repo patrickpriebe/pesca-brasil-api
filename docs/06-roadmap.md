@@ -1,16 +1,14 @@
 # Roadmap
 
-What is missing, roughly in the order it should be built, and what is deliberately out
-of scope.
+What is missing, what was closed, and what is deliberately out of scope.
 
 Every item here is referenced from somewhere else in the documentation. Nothing on this
 list is a surprise to the code — the point of writing it down is that a limitation
 nobody has named is a limitation nobody fixes.
 
 - [Done](#done)
-- [Correctness and safety first](#correctness-and-safety-first)
-- [Then the foundations](#then-the-foundations)
-- [Then the product](#then-the-product)
+- [Blocked on a decision](#blocked-on-a-decision)
+- [Next](#next)
 - [Smaller things worth fixing](#smaller-things-worth-fixing)
 - [Deliberately out of scope](#deliberately-out-of-scope)
 
@@ -20,191 +18,157 @@ nobody has named is a limitation nobody fixes.
 
 Kept on the list rather than deleted, so the reasoning survives the fix.
 
+### Authorization
+
 | Was | Now |
 |---|---|
-| **Roles never enforced.** `ROLE_ADMIN` was seeded, assigned and returned on login, and no endpoint checked it | `@EnableMethodSecurity` on `SecurityConfig`, `@PreAuthorize("hasRole('ADMIN')")` on all fourteen catalogue write handlers. Catch records stay writable by any verified fisher |
+| **Roles never enforced.** `ROLE_ADMIN` was seeded, assigned and returned on login, and no endpoint checked it | `@EnableMethodSecurity`, and `@PreAuthorize("hasRole('ADMIN')")` on all fourteen catalogue write handlers. Catch records stay writable by any verified fisher |
 | **Catch-record deletion authenticated but not owned** | The service loads the record, compares its owner against the principal, and excepts `ROLE_ADMIN`. Not-yours answers as not-found |
-| **`jwt.secret` had a committed fallback** | `${JWT_SECRET}` with no default, so a missing variable fails the boot. `JwtUtil` refuses a secret shorter than 32 characters at construction |
 | **Image upload open and unbounded** | Token required, 5 MB cap in configuration, `image/*` only, empty file refused |
-| **`forgot-password` had no captcha and confirmed account existence** | Captcha added; identical response whether or not the account exists; `reset-password` collapsed to one failure message |
+| **Anonymous writes answered `403` with an empty body** | An `AuthenticationEntryPoint` answers `401` and an `AccessDeniedHandler` answers `403`, both in the API's error envelope — *authenticate first* and *you may not* stopped being the same response |
+
+### Accounts
+
+| Was | Now |
+|---|---|
+| **`jwt.secret` had a committed fallback** | `${JWT_SECRET}` with no default, so a missing variable fails the boot. `JwtUtil` refuses a secret shorter than 32 characters at construction |
+| **`forgot-password` had no captcha and confirmed account existence** | Captcha added; identical response either way; `reset-password` collapsed to one message for unknown e-mail, wrong code and expired code |
 | **OTP from `java.util.Random`, range excluded `999999`** | `SecureRandom` and `nextInt(1_000_000)` |
+| **No attempt counter on the six-digit code** | Five wrong guesses destroy the code. The counter lives in `verification_attempts`, nullable so `ddl-auto=update` can add it to a populated table |
+| **No password policy** | Minimum of eight characters, enforced in `UserService` — so it covers the reset flow too — and declared on the DTOs so the message lands on the right field |
+| **Nothing rate limited** | Fixed window per source address over `/api/auth/**`, with `server.forward-headers-strategy=framework` so it sees the real client behind Render's proxy |
 
-> **`ROLE_ADMIN` is not granted by any endpoint**, and the frontend's management screens
-> are guarded by `authGuard` alone — so a `ROLE_PESCADOR` account now gets `403` from
-> those screens' writes. Promote the accounts that need it:
->
-> ```sql
-> INSERT INTO tb_user_roles (user_id, role_id)
-> SELECT u.id, r.id FROM tb_user u, tb_role r
-> WHERE u.email = 'you@example.com' AND r.name = 'ROLE_ADMIN';
-> ```
->
-> The frontend's HTTP interceptor logs the user out on `403` as well as `401`, so a
-> non-admin hitting a management screen is signed out rather than shown a message.
-> Adding a role check to the Angular guard is the matching frontend change.
+### Correctness
 
----
+| Was | Now |
+|---|---|
+| **Every `RuntimeException` became `404`** | `NotFoundException`, `BusinessException`, `ConflictException` and `TooManyRequestsException`, each with its own status; anything unrecognised is a logged `500` |
+| **Validation errors arrived comma-joined** | `fieldErrors`, a map from field to message, alongside the summary |
+| **`sortBy` went straight to `Sort.by(...)`** | An allowlist per resource, a `direction` parameter, and a ceiling on `size` |
+| **`@EnableAsync` was missing**, so `@Async` mail ran on the request thread inside the transaction | Enabled on `BrazilApplication` |
+| **Every coordinate created a new fishing spot** | A spot within roughly 55 m on the same river is reused; the table grows once per place |
+| **`diasNaAgua` counted distinct timestamps** | `COUNT(DISTINCT CAST(c.catchDate AS date))` |
+| **`FishService.save` dropped unknown ids silently** | The resolved count is compared against the requested one and a missing id is refused |
+| **`CatchRecordRequestDTO` demanded map fields even with `fishingSpotId`** | `@AssertTrue` cross-field checks: exactly one of the two paths must be complete, and coordinates must be on the planet |
+| **Delete by id ignored whether the row existed** | Every `delete` checks first and answers `404` |
+| **`RiverSpecies` accepted duplicate river + fish pairs** | Refused with `409`. The database constraint still needs the migration |
+| **Recommendations were writable and unreadable** | `FishResponseDTO` carries `recommendedBaits` and `recommendedEquipments`; `CatchRecordResponseDTO` carries `equipmentType` |
+| **`buscarComFiltro` was written and never called** | Wired to `GET /api/catch-records?search=` |
+| **`findById` on baits and equipment was unrouted** | `GET /api/baits/{id}` and `GET /api/equipments/{id}` |
+| **`e.printStackTrace()` in the JWT filter** | SLF4J, and the `401` bodies are JSON |
 
-## Correctness and safety first
+### Operations
 
-### 1 · Rate limiting
-
-Nothing is limited. Login, registration and password reset can each be automated
-against as fast as the network allows, and the free tiers behind them (SMTP quota,
-Cloudinary storage, Supabase connections) are the things that actually break first.
-
-The right layer is the edge rather than a counter inside a service — Render's platform
-controls, or a gateway in front. Bucket4j on the auth endpoints is the in-process
-fallback if the edge is not available.
-
-This one has not simply been deferred for time. An in-process limiter behind Render's
-proxy sees one source address for every request unless `X-Forwarded-For` is parsed, and
-a limiter that gets that wrong throttles the entire user base as though it were a
-single client — a worse failure than the gap it closes. The decision is which layer,
-not whether.
-
-### 2 · An attempt counter on the reset code
-
-The reset flow no longer leaks who exists, and the code now comes from `SecureRandom` —
-but a six-digit code has a million values and fifteen minutes of life, and nothing
-counts how many guesses arrive inside that window.
-
-A per-account counter that invalidates the code after a handful of wrong attempts is
-the fix, and it is independent of item 1: rate limiting bounds the request rate, and
-this bounds the total guesses against one code.
-
-### 3 · A password policy
-
-Nothing checks length or composition today, so a one-character password is accepted.
-A minimum length is the whole of the useful part; composition rules mostly produce
-worse passwords.
+| Was | Now |
+|---|---|
+| **One test, and it needed a live database** | 43 tests. `src/test/resources/application.properties` points the suite at H2, so it runs anywhere |
+| **No CI** | `.github/workflows/ci.yml`: `./mvnw verify` on JDK 21, a credential-format scan over the whole history, and a Docker build |
+| **Local development shared the deployed database** | `docker-compose.yml` with PostgreSQL on 5433, and `application-local.properties.example` pointing at it |
+| **Swagger unreachable** | `pescabrasil.openapi.public` opens `/swagger-ui` and `/v3/api-docs`; the local example turns it on, the deployed default leaves it off. `OpenApiConfig` declares the bearer scheme so *Authorize* works |
+| **No health endpoint** | Actuator with `health` exposed and `show-details=never`; the probe is public, the rest of Actuator is not |
+| **`show-sql` on in every environment** | Off by default, on in the local example |
+| **No `.dockerignore`; `COPY . .` shipped `target/`** | Added, and the Dockerfile resolves dependencies in their own layer and runs as a non-root user on a JRE base |
+| **CORS origins hard-coded** | `pescabrasil.cors.allowed-origins`, defaulting to the two real origins |
+| **`pom.xml` had empty metadata blocks; `HELP.md` was the untouched Initializr file** | Filled in; removed |
 
 ---
 
-## Then the foundations
+## Blocked on a decision
 
-### 4 · Flyway, and `ddl-auto=validate`
+Not deferred for time. Each needs an answer that is not the code's to give.
 
-`ddl-auto=update` never drops, never alters, leaves no record of what ran, and gives
-the application permission to reshape production's schema at boot.
+### 1 · Flyway, and `ddl-auto=validate`
 
-Baseline the current schema as `V1__baseline.sql`, own every change as a numbered
-script, and switch to `validate` so a mismatch fails the boot instead of silently
-migrating. This unblocks two things that are otherwise impossible: renaming
-`catch_record` to `tb_catch_record`, and moving `catch_date` from `LocalDateTime` to
-`OffsetDateTime`.
+`ddl-auto=update` never drops, never alters, leaves no record of what ran, and gives the
+application permission to reshape production's schema at boot. Replacing it means
+baselining **the schema that actually exists in Supabase today**, not the one the
+entities imply — those two have drifted by definition, because `update` only ever adds.
 
-### 5 · A real test suite
+The safe sequence is: dump the live schema, commit it as `V1__baseline.sql`, set
+`spring.flyway.baseline-on-migrate=true`, then switch `ddl-auto` to `validate` and watch
+the boot fail until the baseline and the entities agree. That first failure is the point
+of the exercise; doing it from a guessed baseline would put a wrong schema in the
+repository and break the deploy.
 
-One test exists — `contextLoads` — and it needs a live database. The shape it should
-grow into is set out in [Running and deploying](05-deployment.md#testing). The single
-most valuable first test is the JWT contract, because that is the only place where a
-silent regression is an authentication bypass rather than a broken screen.
+It blocks three other items:
 
-### 6 · CI
+- renaming `catch_record` to `tb_catch_record`, so it matches its twelve `tb_*` siblings;
+- moving `catch_date` from `LocalDateTime` to a zoned type;
+- `UNIQUE(river_id, fish_id)` on `tb_river_species` — the service refuses duplicates now,
+  but a constraint cannot be added to a table that already holds some.
 
-There is no pipeline in this repository. A GitHub Actions workflow running
-`./mvnw verify` on JDK 21 for every push and pull request, plus a credential-format
-scan over the history, is a morning's work and stops the next regression from reaching
-Render.
+### 2 · Enforcing the closed seasons
 
-### 7 · A local database, and a `docker-compose.yml`
+`tb_fishing_regulation` stores *piracema* periods and nothing consults them. The product
+question comes before the code: refuse a catch record dated inside a closed season, or
+accept it and mark it?
 
-`application-local.properties` currently points at the same Supabase instance the
-deployed API uses, so local development writes to production data. A compose file with
-PostgreSQL, and a local profile pointing at it, removes an entire category of accident.
+Refusing punishes honest reporting and will produce false dates — the fisher who logged
+the truth is the one who gets blocked. Accepting and flagging keeps the record accurate
+and still says what the rule was. That is the recommendation, and it is a call about
+what the product is for.
 
-### 8 · Backend error tracking
+It also needs the basin promoted from free text to its own table: matching
+`tb_river.hydrographic_basin` against `tb_fishing_regulation.hydrographic_basin` by
+string is what would make the check unreliable.
 
-Sentry is in the frontend. A server-side exception appears in Render's log stream and
-nowhere else. Add `sentry-spring-boot-starter`, and Spring Boot Actuator with a health
-endpoint — which Render can use as a health check, and which is the prerequisite for
-any monitoring at all.
-
-While there: turn off `spring.jpa.show-sql` outside local, and replace
-`e.printStackTrace()` in `JwtAuthenticationFilter` with a logger.
-
-### 9 · An exception hierarchy
-
-`GlobalExceptionHandler` maps every `RuntimeException` to `404`, so a genuine server
-fault is reported as "not found". Introduce `NotFoundException`,
-`BusinessException` and `ConflictException`, map each to its own status, and let
-anything unrecognised be a `500` — which is what it is.
-
-Bean-validation failures should return a field-keyed map rather than a
-comma-joined string, so the frontend can put each message next to its input.
-
----
-
-## Then the product
-
-### 10 · Expose Swagger
-
-`springdoc-openapi` is on the classpath and both `/v3/api-docs` and
-`/swagger-ui/**` fall through to `anyRequest().authenticated()`, so the explorer cannot
-load its own document. Permitting them is one line — the actual decision is whether the
-deployed environment should publish its full route list, or whether the explorer should
-be local-only.
-
-Then annotate: `@Operation`, `@ApiResponse`, and a `SecurityScheme` for the bearer
-token so the *Authorize* button works.
-
-### 11 · Return what the API already stores
-
-Two relationships are writable and not readable:
-
-- `FishResponseDTO` carries no baits or equipment, so the recommendations written
-  through `POST /api/fishes` are invisible through the API.
-- `CatchRecordResponseDTO` carries `equipmentId` but no equipment name, while bait,
-  fish and spot all carry both.
-
-Neither needs a schema change.
-
-### 12 · Deduplicate fishing spots
-
-Every catch record posted with coordinates creates a new `tb_fishing_spot` row. Two
-records from the same rock produce two spots, and the table grows once per catch rather
-than once per place.
-
-Match against existing spots within a small radius before inserting — a few dozen
-metres is the right order — and reuse the match. This is the direct cost of the
-project's central decision, and the decision is still right; the deduplication is the
-part that was deferred.
-
-### 13 · Enforce the closed seasons
-
-`tb_fishing_regulation` stores *piracema* periods and nothing consults them. Posting a
-catch record dated inside a closed season is accepted silently.
-
-The product question comes before the code: refuse the record, or accept it with a
-warning flag? Refusing punishes honest reporting and will produce false dates. The
-better answer is almost certainly to accept, mark it, and show the fisher what the rule
-was.
-
-This also needs the basin promoted from free text to its own table, because matching
-`tb_river.hydrographic_basin` against
-`tb_fishing_regulation.hydrographic_basin` by string is what makes the check
-unreliable.
-
-### 14 · Fix `diasNaAgua`
-
-The fisher ranking counts `COUNT(DISTINCT c.catchDate)` — distinct *timestamps*. Two
-catches an hour apart on one trip count as two days. `COUNT(DISTINCT CAST(c.catchDate
-AS date))` is the fix.
-
-### 15 · Private logbooks
+### 3 · Private logbooks
 
 Every catch record is public, which is the product's premise and is right for the
-leaderboards. A per-record visibility flag would let a fisher keep a spot to themselves
-without leaving the app — the single most requested thing in any fishing community,
-because a good spot stops being good once it is on a map.
+leaderboards. A per-record visibility flag would let a fisher keep a spot to themselves —
+the single most requested thing in any fishing community, because a good spot stops
+being good once it is on a map.
 
-### 16 · Sorting, properly
+It changes what the product *is*, and it changes the rankings: a private record that
+still competes leaks the spot through the leaderboard anyway.
 
-`sortBy` is passed straight to `Sort.by(...)`, so an unknown property becomes a runtime
-failure rather than a `400`, and the direction is fixed per endpoint rather than chosen
-by the caller. Validate the property against an allowlist per resource and accept a
-`direction` parameter.
+---
+
+## Next
+
+Ordinary work, in rough order.
+
+### 4 · Backend error tracking
+
+A server-side exception now reaches the logger rather than stdout, and Actuator answers
+a health probe — but nothing aggregates or alerts. `sentry-spring-boot-starter` needs a
+DSN, which needs an account decision; the frontend already has one, and pointing both at
+the same project is the obvious move.
+
+### 5 · Rate limiting at the edge
+
+The in-process limiter is correct for one instance and honest about its limits: the
+state is in memory, so it resets on restart and is not shared. From two instances the
+effective limit doubles. Moving it to Render's platform controls or a gateway is the
+fix, and the in-process one stays as the fallback.
+
+### 6 · Widen the test suite
+
+43 tests cover the JWT contract, the account flows, the catch-record branches, the
+authorization rules on one controller and the pageable factory. What is not covered:
+the other six controllers' authorization (the rule is identical, so a parameterised test
+would do), the Cloudinary and reCAPTCHA integrations against a stubbed HTTP server, and
+the derived queries and the ranking projection against a real PostgreSQL.
+
+### 7 · N+1 on the fish catalogue
+
+`FishResponseDTO` now carries the recommendations, and each fish loads its two
+collections separately — a page of ten costs twenty extra queries. An `@EntityGraph`
+would fix `findById`; for the paged list it would force pagination in memory, so the
+answer there is either two batched queries or a list without recommendations.
+
+### 8 · An admin path for the catalogue
+
+`ROLE_ADMIN` is granted by a SQL statement. That is correct — a registration endpoint
+able to hand out the role that guards the catalogue would not be guarding it — but there
+is no path for an existing administrator to promote somebody, which is a different thing.
+
+### 9 · The frontend's role guard
+
+The Angular `authGuard` checks only that a session exists, so a `ROLE_PESCADOR` account
+still reaches the management screens and gets `403` on the first write. Worse, the HTTP
+interceptor logs out on `403` as well as `401`, so the person is signed out instead of
+told. Both live in [pesca-brasil-ui](https://github.com/patrickpriebe/pesca-brasil-ui).
 
 ---
 
@@ -212,18 +176,12 @@ by the caller. Validate the property against an allowlist per resource and accep
 
 | Item | Where |
 |---|---|
-| `@EnableAsync` is missing, so `EmailService`'s `@Async` methods run on the request thread | `BrazilApplication` |
-| `CatchRecord` has no `@Table`, so it is `catch_record` while every sibling is `tb_*` | needs item 4 first |
-| `catch_date` is `LocalDateTime` — no time zone | needs item 4 first |
 | `CatchRecord` declares no `equals`/`hashCode`, unlike all twelve other entities | `entity/CatchRecord.java` |
-| `RiverSpeciesRepository` has no uniqueness constraint on `(river_id, fish_id)` | duplicate pairings are accepted |
-| `FishService.save` drops unknown bait and equipment ids silently — `findAllById` returns what it finds | `service/FishService.java` |
-| `CatchRecordRequestDTO` requires `riverId`, `latitude` and `longitude` even when `fishingSpotId` is sent and they are ignored | needs cross-field validation |
-| `BaitService.findById` and `EquipmentService.findById` exist and are not routed | add `GET /{id}`, or delete them |
-| `buscarComFiltro` on `CatchRecordRepository` is written and never called | wire it to a `?search=` parameter, or delete it |
-| No `.dockerignore`, so `COPY . .` ships `target/` into the build stage | root |
-| The `pom.xml` has empty `<name>`, `<description>`, `<licenses>` and `<scm>` blocks | root |
-| `HELP.md` is the untouched Spring Initializr file | root |
+| The fish rankings break ties by whatever order the database returned | `CatchRecordService` |
+| `RankingPeixeResponseDTO.medida` carries centimetres or kilograms depending on the URL called | `dto/response/ranking/` |
+| A handful of Portuguese identifiers survive — `buscarComFiltro`, `RankingPescadorProjection`, `verificarFiltroAntiRobo` | across the codebase |
+| The rate limiter's window is fixed, not sliding, so a burst can straddle two windows | `config/ratelimit/RateLimitFilter.java` |
+| `@Operation` annotations exist; `@ApiResponse` examples do not | controllers |
 
 ---
 

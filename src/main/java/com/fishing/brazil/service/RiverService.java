@@ -2,6 +2,7 @@ package com.fishing.brazil.service;
 
 import com.fishing.brazil.dto.request.RiverRequestDTO;
 import com.fishing.brazil.dto.response.RiverResponseDTO;
+import com.fishing.brazil.exception.NotFoundException;
 import com.fishing.brazil.entity.River;
 import com.fishing.brazil.repository.RiverRepository;
 import org.springframework.data.domain.Page;
@@ -46,6 +47,9 @@ public class RiverService {
 
     @Transactional
     public void delete(Long id) {
+        if (!riverRepository.existsById(id)) {
+            throw new NotFoundException("Rio não encontrado.");
+        }
         riverRepository.deleteById(id);
     }
 

@@ -9,6 +9,7 @@ are.
 - [Passwords](#passwords)
 - [The token](#the-token)
 - [Why the filter reads the database](#why-the-filter-reads-the-database)
+- [Rate limiting](#rate-limiting)
 - [The authorization model](#the-authorization-model)
 - [reCAPTCHA](#recaptcha)
 - [The reset flow does not confirm who exists](#the-reset-flow-does-not-confirm-who-exists)
@@ -101,8 +102,15 @@ rainbow table.
 The raw password exists in exactly two places in the codebase — the request DTO and
 the argument to `encode` — and is never logged, never stored and never returned.
 
-**There is no password policy.** Nothing checks length, composition or whether the
-password appears in a breach corpus. That is a real gap, listed below.
+**The policy is a minimum length, and nothing else.** Eight characters, checked in
+`UserService` rather than only on the request DTO — the reset flow does not pass through
+the registration DTO, and a rule living only in an annotation would cover one of the two
+places a password is set. The DTOs carry the same constraint so the message lands on the
+right field; the service is what makes it true.
+
+Composition rules are deliberately absent: they mostly push everybody onto the same
+predictable shape. What would genuinely help and is missing is a breach-corpus check,
+which needs a service or a wordlist and is not free.
 
 ---
 
@@ -159,10 +167,56 @@ statements false. This is the trade the design makes on purpose: one indexed rea
 request, bought against a stale-authorization window that would otherwise be a full
 day wide.
 
-The filter distinguishes its failures. An `ExpiredJwtException` answers `401` with
-*"Token expirado. Por favor, faça login novamente."*, which is what the frontend needs
-to know it should send the user back to the login screen rather than show an error.
-Anything else answers `401` with *"Token inválido."*
+The filter distinguishes its failures, and both answers are JSON. An `ExpiredJwtException`
+answers `401` with *"Token expirado. Por favor, faça login novamente."*, which is what
+the frontend needs in order to send the user back to the login screen rather than show a
+generic error. Anything else is logged through SLF4J — with the method, the path and the
+exception message, never the token — and answers `401` with *"Token inválido."*
+
+### Refusals from the filter chain say which refusal they are
+
+Spring Security's default for an unauthenticated request to a protected route, with no
+entry point configured, is `403` with an empty body — the same answer it gives to a
+request that *is* authenticated but lacks the role. Those are different situations, and
+a client cannot tell them apart from a body that does not exist.
+
+`SecurityErrorHandlers` supplies both halves: an `AuthenticationEntryPoint` that answers
+`401` *"Autenticação necessária"*, and an `AccessDeniedHandler` that answers `403` *"Você
+não tem permissão"*, each in the same error envelope the rest of the API uses. **Sign in**
+and **you may not** stopped being the same response.
+
+---
+
+## Rate limiting
+
+`RateLimitFilter` applies a fixed window per source address over `/api/auth/**` —
+twenty requests a minute by default, configurable, and answering `429` with a
+`Retry-After` header in the API's error envelope.
+
+Only the account endpoints are limited, because they are the ones whose cost is not
+ours: every registration sends an e-mail, every login and reset calls Google, and the
+free tiers behind those — the SMTP quota, the database connections — are what actually
+breaks first under automation. A read of the fish catalogue costs a query.
+
+**It depends on `server.forward-headers-strategy=framework`, and that is the whole
+risk.** Behind Render's proxy, `getRemoteAddr()` returns the proxy's address for every
+request; a limiter reading that would throttle the entire user base as though it were a
+single client — a worse failure than the gap it closes. With the strategy enabled,
+Spring rewrites the request from `X-Forwarded-For` before any of our filters run, and
+the limiter sees the real caller.
+
+Two honest limits, both on the [roadmap](06-roadmap.md#5--rate-limiting-at-the-edge):
+
+- **The state is in memory.** It resets on restart and is not shared between instances,
+  so from two instances the effective limit is twice what is configured. The right home
+  for this is the edge — Render's own controls, or a gateway — and the in-process
+  version is the fallback, not the destination.
+- **The window is fixed, not sliding.** A burst that straddles two windows can send up
+  to twice the limit in quick succession.
+
+The map is swept of expired windows once it grows past ten thousand entries; without
+that it would accumulate one entry per address seen since the last restart, which is a
+slow leak that looks like ordinary memory use.
 
 ---
 
@@ -298,9 +352,15 @@ fifteen-minute life, and `java.util.Random` is a linear congruential generator w
 future output is derivable from a short run of past output. The range is
 `nextInt(1_000_000)`, which reaches `999999`; `nextInt(999999)` never does.
 
-What is still missing is an attempt counter. A six-digit code has a million values and
-fifteen minutes of life, and nothing currently limits how many guesses arrive in that
-window — see [Known gaps](#known-gaps).
+**And the code now has a ceiling on guesses.** A six-digit code has a million values and
+fifteen minutes of life, which is walkable by brute force if nothing counts the attempts.
+`verification_attempts` counts the wrong ones, and the fifth destroys the code — after
+which even the correct code fails, because there is nothing left to match. The counter
+resets whenever a new code is issued or one is used successfully.
+
+The column is nullable and the Java field is `Integer`, not `int`: with `ddl-auto=update`
+owning the schema, adding a `NOT NULL` column to a table that already has rows fails on
+PostgreSQL, and the application would boot without the column it had started reading.
 
 ---
 
@@ -369,24 +429,18 @@ matter.
 
 | Gap | Consequence |
 |---|---|
-| **Nothing is rate limited** | Login, registration and password reset can be automated against freely; the six-digit reset code has no attempt counter |
-| **No password policy** | A one-character password is accepted |
+| **Rate limiting is in-process, not at the edge** | The window lives in memory: it resets on restart and is not shared between instances, so from two instances the effective limit doubles |
 | **Tokens cannot be revoked** | A leaked token is valid for up to 24 hours. The per-request database read is what stops a *disabled* account from surviving that window |
-| **`e.printStackTrace()` in the JWT filter** | Stack traces to stdout instead of the logger |
 | **No security headers** | No CSP, HSTS or `X-Content-Type-Options` on API responses |
+| **No backend error aggregation** | Exceptions reach the logger, and on Render the logger reaches the log stream and nothing else |
+| **The schema is owned by `ddl-auto=update`** | Which is also why `UNIQUE(river_id, fish_id)` on `tb_river_species` exists in the service and not in the database |
 
 Each of these has a corresponding entry in the [roadmap](06-roadmap.md).
 
-Rate limiting is the one that has not simply been deferred for time. The right layer is
-the edge — Render's own controls, or a gateway — rather than a counter inside a service,
-and an in-process limiter sitting behind Render's proxy would see one source address
-for all traffic unless `X-Forwarded-For` is parsed correctly. Get that wrong and the
-limiter throttles every user as though they were a single client, which is a worse
-failure than the gap it closes. The decision is still open.
-
 ### Closed since this document was first written
 
-Kept here so the history is legible rather than erased.
+Kept here so the history is legible rather than erased. The reasoning behind each fix
+is in the section above that describes it.
 
 | Was | Now |
 |---|---|
@@ -396,3 +450,8 @@ Kept here so the history is legible rather than erased.
 | Image upload unauthenticated and unbounded | Token required, 5 MB cap, `image/*` only, empty file refused |
 | `forgot-password` had no captcha and confirmed account existence | Captcha added; identical response either way; `reset-password` collapsed to one failure message |
 | OTP from `java.util.Random`, range missing a value | `SecureRandom`, `nextInt(1_000_000)` |
+| No ceiling on guesses against a six-digit code | Five wrong attempts destroy the code |
+| No password policy | A minimum of eight characters, checked in the service so the reset flow is covered too |
+| Nothing rate limited | A fixed window per source address over `/api/auth/**` |
+| Anonymous writes and forbidden writes both answered `403` with an empty body | `401` and `403`, each in the API's error envelope |
+| `e.printStackTrace()` in the JWT filter | SLF4J, and JSON bodies on the `401` responses |

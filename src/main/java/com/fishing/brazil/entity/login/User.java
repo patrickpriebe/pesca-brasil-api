@@ -37,6 +37,16 @@ public class User {
     @Column(name = "verification_code_expires_at")
     private java.time.LocalDateTime verificationCodeExpiresAt;
 
+    // Tentativas erradas contra o codigo atual. Zerado a cada codigo novo e a cada
+    // uso bem-sucedido; ao estourar o teto o codigo e destruido em vez de continuar
+    // disponivel para o proximo palpite.
+    //
+    // Integer, e a coluna e anulavel: com ddl-auto=update, adicionar uma coluna
+    // NOT NULL a uma tabela que ja tem linhas falha no PostgreSQL, e a aplicacao
+    // subiria sem a coluna que passou a ler.
+    @Column(name = "verification_attempts")
+    private Integer verificationAttempts;
+
     @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
             name = "tb_user_roles",

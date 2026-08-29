@@ -2,6 +2,7 @@ package com.fishing.brazil.service;
 
 import com.fishing.brazil.dto.request.FishingSpotRequestDTO;
 import com.fishing.brazil.dto.response.FishingSpotResponseDTO;
+import com.fishing.brazil.exception.NotFoundException;
 import com.fishing.brazil.entity.FishingSpot;
 import com.fishing.brazil.entity.River;
 import com.fishing.brazil.repository.FishingSpotRepository;
@@ -40,7 +41,7 @@ public class FishingSpotService {
     @Transactional
     public FishingSpotResponseDTO save(FishingSpotRequestDTO dto) {
         River river = riverRepository.findById(dto.getRiverId())
-                .orElseThrow(() -> new RuntimeException("Rio não encontrado com o ID: " + dto.getRiverId()));
+                .orElseThrow(() -> new NotFoundException("Rio não encontrado com o ID: " + dto.getRiverId()));
 
         FishingSpot spot = new FishingSpot();
         spot.setRiver(river);
@@ -55,6 +56,9 @@ public class FishingSpotService {
 
     @Transactional
     public void delete(Long id) {
+        if (!fishingSpotRepository.existsById(id)) {
+            throw new NotFoundException("Ponto de pesca não encontrado.");
+        }
         fishingSpotRepository.deleteById(id);
     }
 

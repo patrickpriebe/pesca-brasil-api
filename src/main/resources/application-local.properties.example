@@ -1,0 +1,34 @@
+# ==========================================
+# EXEMPLO DE CONFIGURACAO LOCAL
+# ==========================================
+# Copie para application-local.properties (esse nome esta no .gitignore) e preencha.
+# O perfil "local" ja esta ativo em application.properties.
+
+# Banco local: docker compose up -d na raiz do projeto sobe este.
+# 5433 no host porque 5432 costuma estar ocupado por uma instalacao nativa.
+spring.datasource.url=jdbc:postgresql://localhost:5433/pescabrasil
+spring.datasource.username=pescabrasil
+spring.datasource.password=pescabrasil
+
+# SQL visivel apenas no desenvolvimento
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.format_sql=true
+
+# Swagger acessivel sem token no desenvolvimento
+pescabrasil.openapi.public=true
+
+# Cloudinary — sem isso o upload de imagem falha, o resto funciona
+cloudinary.cloud-name=
+cloudinary.api-key=
+cloudinary.api-secret=
+
+# SMTP — sem isso o codigo de verificacao nao chega
+spring.mail.username=
+spring.mail.password=
+
+# reCAPTCHA — o servico falha fechado, entao registro e login exigem um segredo valido.
+# As chaves de teste documentadas pelo Google sao o caminho usual aqui.
+google.recaptcha.secret=
+
+# Minimo de 32 caracteres: o JwtUtil recusa a inicializacao abaixo disso
+jwt.secret=troque-esta-chave-por-uma-de-no-minimo-32-caracteres

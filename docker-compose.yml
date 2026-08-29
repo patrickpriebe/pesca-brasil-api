@@ -1,0 +1,27 @@
+# PostgreSQL local para desenvolvimento.
+#
+# Existe para que application-local.properties deixe de apontar para o mesmo banco
+# gerenciado que o ambiente implantado usa: sem isso, um experimento local escreve
+# linhas que usuarios reais leem.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pescabrasil-postgres
+    environment:
+      POSTGRES_DB: pescabrasil
+      POSTGRES_USER: pescabrasil
+      POSTGRES_PASSWORD: pescabrasil
+    ports:
+      # 5433 no host porque 5432 costuma estar ocupado por uma instalacao nativa.
+      # Dentro da rede do compose o servico continua sendo postgres:5432.
+      - "5433:5432"
+    volumes:
+      - pescabrasil-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pescabrasil -d pescabrasil"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pescabrasil-pgdata:
